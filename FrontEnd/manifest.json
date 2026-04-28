@@ -1,0 +1,22 @@
+{
+    "name" : "远方 Polaris",
+    "appid" : "__UNI__FARAWAY_REBUILD",
+    "description" : "Faraway uni-app client rebuild",
+    "versionName" : "0.1.1",
+    "versionCode" : "101",
+    "transformPx" : false,
+    "app-plus" : {
+        "usingComponents" : true,
+        "nvueStyleCompiler" : "uni-app",
+        "compilerVersion" : 3,
+        "splashscreen" : {
+            "alwaysShowBeforeRender" : false,
+            "autoclose" : true,
+            "delay" : 0
+        }
+    },
+    "h5" : {
+        "title" : "远方 Polaris"
+    },
+    "vueVersion" : "3"
+}

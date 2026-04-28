@@ -1,0 +1,1392 @@
+from __future__ import annotations
+
+from datetime import date
+from secrets import token_urlsafe
+from typing import Any
+
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel, Field
+
+from app.core.config import settings
+from app.core.security import AuthUser, CurrentUser
+from app.models.ai import GenerateStrategyRequest
+from app.models.common import now_utc
+from app.services.ai_service import generate_strategy
+from app.services.auth_service import (
+    authenticate_password_user,
+    authenticate_phone_user,
+    create_sms_code,
+    get_auth_account_by_uid,
+    issue_token,
+    login_wechat,
+    register_password_user,
+    upsert_user,
+    verify_sms_code,
+)
+from app.services.oss_service import upload_media
+from app.services.store import store
+
+router = APIRouter(prefix="/api", tags=["frontend-api"])
+
+MATCH_RECRUITMENTS_COLLECTION = "fe_match_recruitments"
+MATCH_APPLICATIONS_COLLECTION = "fe_match_applications"
+MATCH_NOTIFICATIONS_COLLECTION = "fe_notifications"
+LEGACY_MATCH_REQUESTS_COLLECTION = "fe_match_requests"
+MATCH_DATE_WINDOW_DAYS = 3
+MATCH_STAY_WINDOW_DAYS = 2
+
+
+def ok(data: Any = None, message: str = "ok") -> dict:
+    return {"code": 0, "message": message, "data": data if data is not None else {}}
+
+
+def paginate(items: list[dict], page: int, page_size: int) -> dict:
+    page = max(page, 1)
+    page_size = max(min(page_size, 100), 1)
+    start = (page - 1) * page_size
+    return {
+        "page": page,
+        "pageSize": page_size,
+        "total": len(items),
+        "list": items[start:start + page_size],
+    }
+
+
+def normalize_text(value: str) -> str:
+    return value.strip().lower()
+
+
+def parse_date_value(value: str | date) -> date:
+    return value if isinstance(value, date) else date.fromisoformat(value)
+
+
+def author_from_user(user: CurrentUser) -> dict:
+    profile = store.get("users", user.uid) or {}
+    return {
+        "id": user.uid,
+        "nickname": profile.get("display_name") or user.display_name,
+        "avatar": profile.get("photo_url", ""),
+    }
+
+
+def user_model(raw: dict) -> dict:
+    return {
+        "id": raw.get("uid") or raw.get("id"),
+        "nickname": raw.get("display_name", ""),
+        "avatar": raw.get("photo_url", ""),
+        "bio": raw.get("bio", ""),
+        "gender": raw.get("gender", "unknown"),
+        "createdAt": raw.get("created_at"),
+        "updatedAt": raw.get("updated_at"),
+    }
+
+
+def user_info(raw: dict) -> dict:
+    return {
+        "id": raw.get("uid") or raw.get("id"),
+        "nickname": raw.get("display_name", ""),
+        "avatar": raw.get("photo_url", ""),
+    }
+
+
+def is_published(item: dict) -> bool:
+    return item.get("status", "published") == "published"
+
+
+def is_owner(item: dict, user: CurrentUser) -> bool:
+    return item.get("author", {}).get("id") == user.uid
+
+
+def interaction_id(user_id: str, kind: str, target_id: str) -> str:
+    return f"{user_id}:{kind}:{target_id}"
+
+
+def interaction_exists(user_id: str, kind: str, target_id: str) -> bool:
+    return store.get("fe_interactions", interaction_id(user_id, kind, target_id)) is not None
+
+
+def strategy_model(raw: dict, user: CurrentUser | None = None) -> dict:
+    strategy_id = raw["id"]
+    result = {
+        "id": strategy_id,
+        "title": raw.get("title", ""),
+        "summary": raw.get("summary", ""),
+        "content": raw.get("content", ""),
+        "destination": raw.get("destination", ""),
+        "days": raw.get("days", 0),
+        "coverUrl": raw.get("coverUrl", ""),
+        "tags": raw.get("tags", []),
+        "author": raw.get("author", {}),
+        "likeCount": raw.get("likeCount", 0),
+        "favoriteCount": raw.get("favoriteCount", 0),
+        "viewCount": raw.get("viewCount", 0),
+        "commentCount": raw.get("commentCount", 0),
+        "shareCount": raw.get("shareCount", 0),
+        "status": raw.get("status", "published"),
+        "createdAt": raw.get("createdAt"),
+        "updatedAt": raw.get("updatedAt"),
+    }
+    if user:
+        result["isLiked"] = interaction_exists(user.uid, "strategy_like", strategy_id)
+        result["isFavorited"] = interaction_exists(user.uid, "strategy_favorite", strategy_id)
+    return result
+
+
+def post_model(raw: dict, user: CurrentUser | None = None) -> dict:
+    post_id = raw["id"]
+    result = {
+        "id": post_id,
+        "type": raw.get("type", "vlog"),
+        "title": raw.get("title", ""),
+        "content": raw.get("content", ""),
+        "location": raw.get("location", ""),
+        "coverUrl": raw.get("coverUrl", ""),
+        "mediaList": raw.get("mediaList", []),
+        "tags": raw.get("tags", []),
+        "author": raw.get("author", {}),
+        "likeCount": raw.get("likeCount", 0),
+        "favoriteCount": raw.get("favoriteCount", 0),
+        "commentCount": raw.get("commentCount", 0),
+        "shareCount": raw.get("shareCount", 0),
+        "status": raw.get("status", "published"),
+        "createdAt": raw.get("createdAt"),
+        "updatedAt": raw.get("updatedAt"),
+    }
+    if user:
+        result["isLiked"] = interaction_exists(user.uid, "post_like", post_id)
+        result["isFavorited"] = interaction_exists(user.uid, "post_favorite", post_id)
+    return result
+
+
+def get_content_item(collection: str, item_id: str, not_found_detail: str) -> dict:
+    item = store.get(collection, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    return item
+
+
+def ensure_strategy_visible(item: dict, current_user: CurrentUser) -> dict:
+    if is_published(item) or is_owner(item, current_user):
+        return item
+    raise HTTPException(status_code=404, detail="strategy not found")
+
+
+def ensure_post_visible(item: dict, current_user: CurrentUser) -> dict:
+    if is_published(item) or is_owner(item, current_user):
+        return item
+    raise HTTPException(status_code=404, detail="post not found")
+
+
+def toggle_interaction(user_id: str, collection: str, target_id: str, kind: str, count_field: str) -> tuple[bool, int]:
+    item = store.get(collection, target_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="content not found")
+
+    iid = interaction_id(user_id, kind, target_id)
+    if store.get("fe_interactions", iid):
+        store.delete("fe_interactions", iid)
+        new_count = max(int(item.get(count_field, 0)) - 1, 0)
+        enabled = False
+    else:
+        now = now_utc().isoformat()
+        store.upsert(
+            "fe_interactions",
+            iid,
+            {
+                "id": iid,
+                "userId": user_id,
+                "kind": kind,
+                "targetId": target_id,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+        )
+        new_count = int(item.get(count_field, 0)) + 1
+        enabled = True
+
+    store.update(collection, target_id, {count_field: new_count, "updatedAt": now_utc().isoformat()})
+    return enabled, new_count
+
+
+def comment_model(raw: dict) -> dict:
+    return {
+        "id": raw["id"],
+        "userId": raw.get("userId", ""),
+        "nickname": raw.get("nickname", ""),
+        "avatar": raw.get("avatar", ""),
+        "content": raw.get("content", ""),
+        "createdAt": raw.get("createdAt"),
+    }
+
+
+def list_comments(target_type: str, target_id: str) -> list[dict]:
+    items = [
+        comment_model(item)
+        for item in store.list("fe_comments")
+        if item.get("targetType") == target_type and item.get("targetId") == target_id
+    ]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return items
+
+
+def create_comment(collection: str, target_type: str, target_id: str, content: str, current_user: CurrentUser) -> dict:
+    item = get_content_item(collection, target_id, "content not found")
+    text = content.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="comment content is required")
+    author = author_from_user(current_user)
+    now = now_utc().isoformat()
+    comment = store.create(
+        "fe_comments",
+        {
+            "targetType": target_type,
+            "targetId": target_id,
+            "userId": current_user.uid,
+            "nickname": author["nickname"],
+            "avatar": author["avatar"],
+            "content": text,
+            "createdAt": now,
+            "updatedAt": now,
+        },
+    )
+    store.update(
+        collection,
+        target_id,
+        {
+            "commentCount": int(item.get("commentCount", 0)) + 1,
+            "updatedAt": now,
+        },
+    )
+    return comment_model(comment)
+
+
+def share_content(collection: str, target_id: str) -> int:
+    item = get_content_item(collection, target_id, "content not found")
+    share_count = int(item.get("shareCount", 0)) + 1
+    store.update(collection, target_id, {"shareCount": share_count, "updatedAt": now_utc().isoformat()})
+    return share_count
+
+
+def list_interaction_contents(current_user: CurrentUser, kind_suffix: str, type_filter: str, page: int, page_size: int) -> dict:
+    items: list[dict] = []
+    interactions = [
+        item
+        for item in store.list("fe_interactions")
+        if item.get("userId") == current_user.uid and item.get("kind", "").endswith(kind_suffix)
+    ]
+    interactions.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+
+    for interaction in interactions:
+        kind = interaction.get("kind", "")
+        target_id = interaction.get("targetId", "")
+        if kind.startswith("strategy_"):
+            if type_filter not in ("all", "strategy"):
+                continue
+            target = store.get("fe_strategies", target_id)
+            if target and is_published(target):
+                items.append({"contentType": "strategy", **strategy_model(target, current_user)})
+        elif kind.startswith("post_"):
+            target = store.get("fe_posts", target_id)
+            if not target or not is_published(target):
+                continue
+            content_type = target.get("type", "vlog")
+            if type_filter not in ("all", content_type):
+                continue
+            items.append({"contentType": content_type, **post_model(target, current_user)})
+
+    return paginate(items, page, page_size)
+
+
+def build_strategy_content(overview: str, daily_plans: list[dict], tips: list[str]) -> str:
+    lines = [overview.strip(), "", "行程安排"]
+    for plan in daily_plans:
+        lines.append(f"Day {plan.get('day', 0)}")
+        activities = plan.get("activities", [])
+        if activities:
+            lines.append("活动：")
+            lines.extend(f"- {activity}" for activity in activities)
+        food = plan.get("food", [])
+        if food:
+            lines.append("美食：")
+            lines.extend(f"- {item}" for item in food)
+        accommodation = plan.get("accommodation", "").strip()
+        if accommodation:
+            lines.append(f"住宿：{accommodation}")
+        lines.append("")
+    if tips:
+        lines.append("出行提示")
+        lines.extend(f"- {tip}" for tip in tips)
+    return "\n".join(line for line in lines if line is not None).strip()
+
+
+def build_ai_strategy_draft(payload: "AiPayload", result: dict) -> dict:
+    destination = result.get("destination") or payload.destination
+    overview = result.get("overview", "")
+    daily_plans = result.get("dailyPlans", [])
+    tips = result.get("tips", [])
+    title = f"{destination}{payload.days}天旅行攻略"
+    summary = overview[:120].strip() or f"适合 {payload.days} 天出行的 {destination} 行程草案"
+    tags = [destination, payload.groupType, payload.budget]
+    deduped_tags: list[str] = []
+    for tag in tags:
+        value = (tag or "").strip()
+        if value and value not in deduped_tags:
+            deduped_tags.append(value)
+    return {
+        "title": title,
+        "summary": summary,
+        "content": build_strategy_content(overview, daily_plans, tips),
+        "destination": destination,
+        "days": payload.days,
+        "coverUrl": "",
+        "tags": deduped_tags,
+        "status": "draft",
+        "overview": overview,
+        "dailyPlans": daily_plans,
+        "tips": tips,
+        "editable": True,
+        "saved": False,
+        "source": "ai",
+    }
+
+
+def issue_frontend_token(user: dict, login_type: str) -> dict:
+    token = issue_token(
+        upsert_user(
+            uid=user["uid"],
+            display_name=user.get("display_name", ""),
+            email=user.get("email", ""),
+            photo_url=user.get("photo_url", ""),
+            bio=user.get("bio", ""),
+        )
+    )
+    profile = store.get("users", user["uid"]) or user
+    return {
+        "token": token.access_token,
+        "refreshToken": token_urlsafe(32),
+        "loginType": login_type,
+        "userInfo": user_info(profile),
+    }
+
+
+def recruit_status(raw: dict) -> str:
+    return raw.get("status", "open")
+
+
+def is_open_recruitment(raw: dict) -> bool:
+    return recruit_status(raw) == "open"
+
+
+def recommend_card(raw: dict, application_status: str) -> dict:
+    return {
+        "recruitId": raw["id"],
+        "publisherUserId": raw.get("publisherUserId", ""),
+        "publisherNickname": raw.get("publisherNickname", ""),
+        "publisherAvatar": raw.get("publisherAvatar", ""),
+        "destination": raw.get("destination", ""),
+        "startDate": raw.get("startDate", ""),
+        "days": raw.get("days", 0),
+        "applicationStatus": application_status,
+    }
+
+
+def my_recruitment_list_item(raw: dict) -> dict:
+    return {
+        "id": raw["id"],
+        "destination": raw.get("destination", ""),
+        "startDate": raw.get("startDate", ""),
+        "days": raw.get("days", 0),
+        "status": recruit_status(raw),
+        "applicationCount": raw.get("applicationCount", 0),
+        "createdAt": raw.get("createdAt"),
+    }
+
+
+def recruitment_application_item(raw: dict) -> dict:
+    return {
+        "applicationId": raw["id"],
+        "applicantUserId": raw.get("applicantUserId", ""),
+        "applicantNickname": raw.get("applicantNickname", ""),
+        "applicantAvatar": raw.get("applicantAvatar", ""),
+        "destination": raw.get("destination", ""),
+        "startDate": raw.get("startDate", ""),
+        "days": raw.get("days", 0),
+        "status": raw.get("status", "pending"),
+        "createdAt": raw.get("createdAt"),
+    }
+
+
+def my_match_application_item(raw: dict) -> dict:
+    return {
+        "applicationId": raw["id"],
+        "recruitId": raw.get("recruitId", ""),
+        "publisherUserId": raw.get("publisherUserId", ""),
+        "publisherNickname": raw.get("publisherNickname", ""),
+        "publisherAvatar": raw.get("publisherAvatar", ""),
+        "destination": raw.get("destination", ""),
+        "startDate": raw.get("startDate", ""),
+        "days": raw.get("days", 0),
+        "status": raw.get("status", "pending"),
+        "createdAt": raw.get("createdAt"),
+    }
+
+
+def draft_item(raw: dict, draft_type: str) -> dict:
+    if draft_type == "strategy":
+        title = raw.get("title") or f'{raw.get("destination", "未命名目的地")} 行程草稿'
+        payload = {
+            "title": raw.get("title", ""),
+            "summary": raw.get("summary", ""),
+            "content": raw.get("content", ""),
+            "destination": raw.get("destination", ""),
+            "days": raw.get("days", 1),
+            "coverUrl": raw.get("coverUrl", ""),
+            "tags": raw.get("tags", []),
+        }
+    else:
+        title = raw.get("title") or f'{raw.get("location", "未命名地点")} 发布草稿'
+        payload = {
+            "type": raw.get("type", "vlog"),
+            "title": raw.get("title", ""),
+            "location": raw.get("location", ""),
+            "content": raw.get("content", ""),
+            "tags": raw.get("tags", []),
+            "coverUrl": raw.get("coverUrl", ""),
+            "mediaList": raw.get("mediaList", []),
+        }
+
+    return {
+        "id": raw["id"],
+        "draftType": draft_type,
+        "title": title,
+        "updatedAt": raw.get("updatedAt") or raw.get("createdAt"),
+        "payload": payload,
+    }
+
+
+def notification_title(notification_type: str) -> tuple[str, str]:
+    mapping = {
+        "new_match_application": ("搭子申请", "你收到了一条新的搭子申请"),
+        "match_application_approved": ("搭子结果", "你的搭子申请已通过"),
+        "match_application_rejected": ("搭子结果", "你的搭子申请未通过"),
+    }
+    return mapping.get(notification_type, ("系统通知", "你收到一条新的消息"))
+
+
+def notification_item(raw: dict) -> dict:
+    type_label, title = notification_title(raw.get("type", ""))
+    return {
+        "id": raw["id"],
+        "type": type_label,
+        "title": title,
+        "createdAt": raw.get("createdAt"),
+        "read": raw.get("read", False),
+    }
+
+
+def legacy_match_request_model(raw: dict) -> dict:
+    return {
+        "id": raw["id"],
+        "destination": raw.get("destination", ""),
+        "startDate": raw.get("startDate", ""),
+        "days": raw.get("days", 0),
+        "budget": raw.get("budget", "中等"),
+        "genderPreference": raw.get("genderPreference", "不限"),
+        "remarks": raw.get("remarks", ""),
+        "status": raw.get("status", "searching"),
+        "createdAt": raw.get("createdAt"),
+        "updatedAt": raw.get("updatedAt"),
+    }
+
+
+def get_recruitment_item(recruit_id: str) -> dict:
+    item = store.get(MATCH_RECRUITMENTS_COLLECTION, recruit_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="recruitment not found")
+    return item
+
+
+def get_application_item(application_id: str) -> dict:
+    item = store.get(MATCH_APPLICATIONS_COLLECTION, application_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="application not found")
+    return item
+
+
+def find_match_application(recruit_id: str, applicant_user_id: str) -> dict | None:
+    for item in store.list(MATCH_APPLICATIONS_COLLECTION):
+        if item.get("recruitId") == recruit_id and item.get("applicantUserId") == applicant_user_id:
+            return item
+    return None
+
+
+def list_recruitment_applications(recruit_id: str) -> list[dict]:
+    return [
+        item
+        for item in store.list(MATCH_APPLICATIONS_COLLECTION)
+        if item.get("recruitId") == recruit_id
+    ]
+
+
+def create_match_notification(user_id: str, notification_type: str, data: dict) -> None:
+    now = now_utc().isoformat()
+    store.create(
+        MATCH_NOTIFICATIONS_COLLECTION,
+        {
+            "userId": user_id,
+            "type": notification_type,
+            "data": data,
+            "read": False,
+            "createdAt": now,
+            "updatedAt": now,
+        },
+    )
+
+
+class DemoLoginPayload(BaseModel):
+    nickname: str = "远方旅客"
+    avatar: str = ""
+
+
+class PasswordLoginPayload(BaseModel):
+    username: str
+    password: str
+
+
+class RegisterPayload(BaseModel):
+    username: str
+    password: str
+    nickname: str = ""
+    phone: str = ""
+    smsCode: str = ""
+    email: str = ""
+
+
+class PhoneLoginPayload(BaseModel):
+    phone: str
+    smsCode: str
+
+
+class SmsCodePayload(BaseModel):
+    phone: str
+
+
+class WeChatLoginPayload(BaseModel):
+    code: str
+
+
+class UserUpdatePayload(BaseModel):
+    nickname: str | None = None
+    bio: str | None = None
+    avatar: str | None = None
+    gender: str | None = None
+
+
+class StrategyPayload(BaseModel):
+    title: str
+    summary: str = ""
+    content: str
+    destination: str
+    days: int = Field(default=1, gt=0, le=60)
+    coverUrl: str = ""
+    tags: list[str] = Field(default_factory=list)
+    status: str = "published"
+
+
+class PostPayload(BaseModel):
+    type: str = "vlog"
+    title: str
+    location: str = ""
+    content: str = ""
+    tags: list[str] = Field(default_factory=list)
+    coverUrl: str = ""
+    mediaList: list[dict] = Field(default_factory=list)
+    status: str = "published"
+
+
+class MatchInputPayload(BaseModel):
+    destination: str = Field(min_length=1, max_length=100)
+    startDate: date
+    days: int = Field(gt=0, le=60)
+
+
+class LegacyMatchPayload(MatchInputPayload):
+    genderPreference: str = "不限"
+    budget: str = "中等"
+    remarks: str = ""
+
+
+class AiPayload(BaseModel):
+    destination: str
+    days: int = Field(default=3, gt=0, le=60)
+    budget: str = "中等"
+    hotelRequirement: str = "不限"
+    allergies: str = "无"
+    pace: str = "适中"
+    groupType: str = "自由行"
+
+
+class CommentPayload(BaseModel):
+    content: str
+
+
+@router.post("/auth/demo-login")
+def login_by_demo(payload: DemoLoginPayload | None = None) -> dict:
+    if not settings.dev_allow_anon_auth:
+        raise HTTPException(status_code=403, detail="demo login is disabled")
+    payload = payload or DemoLoginPayload()
+    user = {
+        "uid": "demo-user",
+        "display_name": payload.nickname,
+        "email": "",
+        "photo_url": payload.avatar,
+        "bio": "探索未知的旅人",
+    }
+    return ok(issue_frontend_token(user, "demo"))
+
+
+@router.post("/auth/register")
+def register(payload: RegisterPayload) -> dict:
+    if payload.phone:
+        verify_sms_code(payload.phone, payload.smsCode)
+    user = register_password_user(
+        username=payload.username,
+        password=payload.password,
+        nickname=payload.nickname,
+        phone=payload.phone,
+        email=payload.email,
+    )
+    account = get_auth_account_by_uid(user["uid"]) or {}
+    return ok(
+        {
+            "id": user["uid"],
+            "username": account.get("username", payload.username),
+            "phone": account.get("phone", ""),
+            "nickname": user.get("display_name", ""),
+            "avatar": user.get("photo_url", ""),
+            "createdAt": user.get("created_at"),
+        },
+        message="registered",
+    )
+
+
+@router.post("/auth/password-login")
+def login_by_password(payload: PasswordLoginPayload) -> dict:
+    if not payload.username or not payload.password:
+        raise HTTPException(status_code=400, detail="username and password are required")
+    user = authenticate_password_user(payload.username, payload.password)
+    return ok(issue_frontend_token(user, "password"))
+
+
+@router.post("/auth/phone-login")
+def login_by_phone(payload: PhoneLoginPayload) -> dict:
+    if not payload.phone or not payload.smsCode:
+        raise HTTPException(status_code=400, detail="phone and smsCode are required")
+    user = authenticate_phone_user(payload.phone, payload.smsCode)
+    return ok(issue_frontend_token(user, "phone"))
+
+
+@router.post("/auth/send-sms-code")
+def send_sms_code(payload: SmsCodePayload) -> dict:
+    record = create_sms_code(payload.phone)
+    data = {"phone": record["phone"], "sent": True}
+    if settings.environment.lower() != "production":
+        data["debugSmsCode"] = record["code"]
+    return ok(data)
+
+
+@router.post("/auth/wechat")
+@router.post("/auth/wechat-login")
+def login_by_wechat(payload: WeChatLoginPayload) -> dict:
+    token = login_wechat(payload.code)
+    return ok(
+        {
+            "token": token.access_token,
+            "refreshToken": token_urlsafe(32),
+            "loginType": "wechat",
+            "userInfo": user_info(token.user),
+        }
+    )
+
+
+@router.post("/auth/logout")
+def logout(current_user: CurrentUser = AuthUser) -> dict:
+    return ok({"userId": current_user.uid})
+
+
+@router.get("/user/profile")
+def get_user_profile(current_user: CurrentUser = AuthUser) -> dict:
+    profile = store.get("users", current_user.uid)
+    if not profile:
+        profile = upsert_user(uid=current_user.uid, display_name=current_user.display_name, email=current_user.email)
+    return ok(user_model(profile))
+
+
+@router.put("/user/profile")
+def update_user_profile(payload: UserUpdatePayload, current_user: CurrentUser = AuthUser) -> dict:
+    profile = store.get("users", current_user.uid) or upsert_user(uid=current_user.uid, display_name=current_user.display_name)
+    updates = {
+        "display_name": payload.nickname if payload.nickname is not None else profile.get("display_name", ""),
+        "bio": payload.bio if payload.bio is not None else profile.get("bio", ""),
+        "photo_url": payload.avatar if payload.avatar is not None else profile.get("photo_url", ""),
+        "gender": payload.gender if payload.gender is not None else profile.get("gender", "unknown"),
+        "updated_at": now_utc().isoformat(),
+    }
+    updated = store.update("users", current_user.uid, updates)
+    account = get_auth_account_by_uid(current_user.uid)
+    if account:
+        store.update(
+            "auth_accounts",
+            current_user.uid,
+            {
+                "display_name": updated.get("display_name", account.get("display_name", "")),
+                "updated_at": now_utc().isoformat(),
+            },
+        )
+    return ok(user_model(updated))
+
+
+@router.get("/user/stats")
+def get_my_stats(current_user: CurrentUser = AuthUser) -> dict:
+    strategies = [
+        item
+        for item in store.list("fe_strategies")
+        if item.get("author", {}).get("id") == current_user.uid and is_published(item)
+    ]
+    posts = [
+        item
+        for item in store.list("fe_posts")
+        if item.get("author", {}).get("id") == current_user.uid and is_published(item)
+    ]
+    likes = [
+        item
+        for item in store.list("fe_interactions")
+        if item.get("userId") == current_user.uid and item.get("kind", "").endswith("_like")
+    ]
+    favorites = [
+        item
+        for item in store.list("fe_interactions")
+        if item.get("userId") == current_user.uid and item.get("kind", "").endswith("_favorite")
+    ]
+    return ok(
+        {
+            "postCount": len(posts),
+            "strategyCount": len(strategies),
+            "favoriteCount": len(favorites),
+            "likeCount": len(likes),
+        }
+    )
+
+
+@router.get("/users/{user_id}")
+def get_user_public_profile(user_id: str) -> dict:
+    profile = store.get("users", user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="user not found")
+    return ok(user_model(profile))
+
+
+@router.get("/users/{user_id}/contents")
+def get_user_published_content(user_id: str, type: str = "all", page: int = 1, pageSize: int = 10) -> dict:
+    items: list[dict] = []
+    if type in ("all", "strategy"):
+        items += [
+            {"contentType": "strategy", **strategy_model(item)}
+            for item in store.list("fe_strategies")
+            if item.get("author", {}).get("id") == user_id and is_published(item)
+        ]
+    if type in ("all", "vlog"):
+        items += [
+            {"contentType": item.get("type", "vlog"), **post_model(item)}
+            for item in store.list("fe_posts")
+            if item.get("author", {}).get("id") == user_id and is_published(item)
+        ]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok(paginate(items, page, pageSize))
+
+
+@router.get("/my/favorites")
+def get_my_favorite_contents(type: str = "all", page: int = 1, pageSize: int = 10, current_user: CurrentUser = AuthUser) -> dict:
+    return ok(list_interaction_contents(current_user, "_favorite", type, page, pageSize))
+
+
+@router.get("/my/likes")
+def get_my_like_contents(type: str = "all", page: int = 1, pageSize: int = 10, current_user: CurrentUser = AuthUser) -> dict:
+    return ok(list_interaction_contents(current_user, "_like", type, page, pageSize))
+
+
+@router.get("/my/drafts")
+def get_my_drafts(current_user: CurrentUser = AuthUser) -> dict:
+    items = [
+        draft_item(item, "strategy")
+        for item in store.list("fe_strategies")
+        if item.get("author", {}).get("id") == current_user.uid and item.get("status") == "draft"
+    ]
+    items += [
+        draft_item(item, "post")
+        for item in store.list("fe_posts")
+        if item.get("author", {}).get("id") == current_user.uid and item.get("status") == "draft"
+    ]
+    items.sort(key=lambda item: item.get("updatedAt") or "", reverse=True)
+    return ok({"list": items})
+
+
+@router.get("/my/notifications")
+def get_my_notifications(current_user: CurrentUser = AuthUser) -> dict:
+    items = [
+        notification_item(item)
+        for item in store.list(MATCH_NOTIFICATIONS_COLLECTION)
+        if item.get("userId") == current_user.uid
+    ]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok({"list": items})
+
+
+@router.get("/home/feed")
+def get_home_feed(page: int = 1, pageSize: int = 10) -> dict:
+    items = [
+        {
+            "id": item["id"],
+            "contentType": "strategy",
+            "title": item.get("title", ""),
+            "coverUrl": item.get("coverUrl", ""),
+            "summary": item.get("summary", ""),
+            "createdAt": item.get("createdAt"),
+        }
+        for item in store.list("fe_strategies")
+        if is_published(item)
+    ]
+    items += [
+        {
+            "id": item["id"],
+            "contentType": item.get("type", "vlog"),
+            "title": item.get("title", ""),
+            "coverUrl": item.get("coverUrl", ""),
+            "summary": item.get("content", ""),
+            "createdAt": item.get("createdAt"),
+        }
+        for item in store.list("fe_posts")
+        if is_published(item)
+    ]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok(paginate(items, page, pageSize))
+
+
+@router.get("/home/recommend-blocks")
+def get_home_recommend_blocks() -> dict:
+    return ok(
+        {
+            "blocks": [
+                {"title": "热门目的地", "type": "destination", "list": ["大理", "冰岛", "京都", "西藏"]},
+                {"title": "精选主题", "type": "category", "list": ["人文历史", "自然风光", "美食地图", "摄影攻略"]},
+            ]
+        }
+    )
+
+
+@router.get("/strategies")
+def get_strategy_list(keyword: str = "", category: str = "", page: int = 1, pageSize: int = 10) -> dict:
+    items = [strategy_model(item) for item in store.list("fe_strategies") if is_published(item)]
+    if keyword:
+        key = keyword.lower()
+        items = [
+            item
+            for item in items
+            if key in item["title"].lower() or key in item["content"].lower() or key in item["destination"].lower()
+        ]
+    if category and category != "全部":
+        items = [item for item in items if category in item.get("tags", [])]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok(paginate(items, page, pageSize))
+
+
+@router.post("/strategies")
+def create_strategy(payload: StrategyPayload, current_user: CurrentUser = AuthUser) -> dict:
+    now = now_utc().isoformat()
+    item = payload.model_dump()
+    item["status"] = "published"
+    item.update(
+        {
+            "author": author_from_user(current_user),
+            "likeCount": 0,
+            "favoriteCount": 0,
+            "viewCount": 0,
+            "commentCount": 0,
+            "shareCount": 0,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+    )
+    created = store.create("fe_strategies", item)
+    return ok(strategy_model(created, current_user))
+
+
+@router.post("/strategies/drafts")
+def save_strategy_draft(payload: StrategyPayload, current_user: CurrentUser = AuthUser) -> dict:
+    now = now_utc().isoformat()
+    item = payload.model_dump()
+    item["status"] = "draft"
+    item.update(
+        {
+            "author": author_from_user(current_user),
+            "likeCount": 0,
+            "favoriteCount": 0,
+            "viewCount": 0,
+            "commentCount": 0,
+            "shareCount": 0,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+    )
+    created = store.create("fe_strategies", item)
+    return ok(strategy_model(created, current_user))
+
+
+@router.get("/strategies/{strategy_id}")
+def get_strategy_detail(strategy_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    item = get_content_item("fe_strategies", strategy_id, "strategy not found")
+    item = ensure_strategy_visible(item, current_user)
+    item = store.update("fe_strategies", strategy_id, {"viewCount": int(item.get("viewCount", 0)) + 1})
+    return ok(strategy_model(item, current_user))
+
+
+@router.post("/strategies/{strategy_id}/like")
+def toggle_strategy_like(strategy_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    is_liked, count = toggle_interaction(current_user.uid, "fe_strategies", strategy_id, "strategy_like", "likeCount")
+    return ok({"isLiked": is_liked, "likeCount": count})
+
+
+@router.post("/strategies/{strategy_id}/favorite")
+def toggle_strategy_favorite(strategy_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    is_favorited, count = toggle_interaction(current_user.uid, "fe_strategies", strategy_id, "strategy_favorite", "favoriteCount")
+    return ok({"isFavorited": is_favorited, "favoriteCount": count})
+
+
+@router.get("/strategies/{strategy_id}/comments")
+def get_strategy_comments(strategy_id: str) -> dict:
+    get_content_item("fe_strategies", strategy_id, "strategy not found")
+    return ok({"list": list_comments("strategy", strategy_id)})
+
+
+@router.post("/strategies/{strategy_id}/comments")
+def create_strategy_comment(strategy_id: str, payload: CommentPayload, current_user: CurrentUser = AuthUser) -> dict:
+    return ok(create_comment("fe_strategies", "strategy", strategy_id, payload.content, current_user))
+
+
+@router.post("/strategies/{strategy_id}/share")
+def share_strategy(strategy_id: str) -> dict:
+    return ok({"shareCount": share_content("fe_strategies", strategy_id)})
+
+
+@router.get("/posts")
+def get_post_list(type: str = "all", keyword: str = "", page: int = 1, pageSize: int = 10) -> dict:
+    items = [post_model(item) for item in store.list("fe_posts") if is_published(item)]
+    if type in ("strategy", "vlog"):
+        items = [item for item in items if item.get("type") == type]
+    if keyword:
+        key = keyword.lower()
+        items = [
+            item
+            for item in items
+            if key in item["title"].lower() or key in item["content"].lower() or key in item["location"].lower()
+        ]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok(paginate(items, page, pageSize))
+
+
+@router.post("/posts")
+def create_post(payload: PostPayload, current_user: CurrentUser = AuthUser) -> dict:
+    now = now_utc().isoformat()
+    item = payload.model_dump()
+    item.update(
+        {
+            "author": author_from_user(current_user),
+            "likeCount": 0,
+            "favoriteCount": 0,
+            "commentCount": 0,
+            "shareCount": 0,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+    )
+    created = store.create("fe_posts", item)
+    return ok(post_model(created, current_user))
+
+
+@router.post("/posts/drafts")
+def save_post_draft(payload: PostPayload, current_user: CurrentUser = AuthUser) -> dict:
+    now = now_utc().isoformat()
+    item = payload.model_dump()
+    item["status"] = "draft"
+    item.update(
+        {
+            "author": author_from_user(current_user),
+            "likeCount": 0,
+            "favoriteCount": 0,
+            "commentCount": 0,
+            "shareCount": 0,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+    )
+    created = store.create("fe_posts", item)
+    return ok(draft_item(created, "post"))
+
+
+@router.get("/posts/{post_id}")
+def get_post_detail(post_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    item = get_content_item("fe_posts", post_id, "post not found")
+    item = ensure_post_visible(item, current_user)
+    return ok(post_model(item, current_user))
+
+
+@router.get("/my/posts")
+def get_my_posts(type: str = "all", page: int = 1, pageSize: int = 10, current_user: CurrentUser = AuthUser) -> dict:
+    items = [
+        post_model(item, current_user)
+        for item in store.list("fe_posts")
+        if item.get("author", {}).get("id") == current_user.uid and is_published(item)
+    ]
+    if type in ("strategy", "vlog"):
+        items = [item for item in items if item.get("type") == type]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok(paginate(items, page, pageSize))
+
+
+@router.post("/posts/{post_id}/like")
+def toggle_post_like(post_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    is_liked, count = toggle_interaction(current_user.uid, "fe_posts", post_id, "post_like", "likeCount")
+    return ok({"isLiked": is_liked, "likeCount": count})
+
+
+@router.post("/posts/{post_id}/favorite")
+def toggle_post_favorite(post_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    is_favorited, count = toggle_interaction(current_user.uid, "fe_posts", post_id, "post_favorite", "favoriteCount")
+    return ok({"isFavorited": is_favorited, "favoriteCount": count})
+
+
+@router.get("/posts/{post_id}/comments")
+def get_post_comments(post_id: str) -> dict:
+    get_content_item("fe_posts", post_id, "post not found")
+    return ok({"list": list_comments("post", post_id)})
+
+
+@router.post("/posts/{post_id}/comments")
+def create_post_comment(post_id: str, payload: CommentPayload, current_user: CurrentUser = AuthUser) -> dict:
+    return ok(create_comment("fe_posts", "post", post_id, payload.content, current_user))
+
+
+@router.post("/posts/{post_id}/share")
+def share_post(post_id: str) -> dict:
+    return ok({"shareCount": share_content("fe_posts", post_id)})
+
+
+@router.get("/search")
+def search_all(keyword: str = "", type: str = "all", page: int = 1, pageSize: int = 10) -> dict:
+    key = keyword.lower()
+    strategies = []
+    vlogs = []
+    if type in ("all", "strategy"):
+        strategies = [
+            strategy_model(item)
+            for item in store.list("fe_strategies")
+            if is_published(item)
+            and (
+                key in item.get("title", "").lower()
+                or key in item.get("destination", "").lower()
+                or key in item.get("content", "").lower()
+            )
+        ]
+    if type in ("all", "vlog"):
+        vlogs = [
+            post_model(item)
+            for item in store.list("fe_posts")
+            if is_published(item)
+            and (
+                key in item.get("title", "").lower()
+                or key in item.get("location", "").lower()
+                or key in item.get("content", "").lower()
+            )
+        ]
+    total = len(strategies) + len(vlogs)
+    return ok(
+        {
+            "keyword": keyword,
+            "type": type,
+            "page": page,
+            "pageSize": pageSize,
+            "total": total,
+            "strategyList": paginate(strategies, page, pageSize)["list"],
+            "vlogList": paginate(vlogs, page, pageSize)["list"],
+        }
+    )
+
+
+@router.get("/search/hot")
+def get_hot_search_list() -> dict:
+    now = now_utc().isoformat()
+    return ok(
+        {
+            "list": [
+                {"id": 1, "keyword": "大理", "type": "destination", "sort": 1, "status": "active", "createdAt": now, "updatedAt": now},
+                {"id": 2, "keyword": "冰岛", "type": "destination", "sort": 2, "status": "active", "createdAt": now, "updatedAt": now},
+                {"id": 3, "keyword": "京都", "type": "destination", "sort": 3, "status": "active", "createdAt": now, "updatedAt": now},
+            ]
+        }
+    )
+
+
+@router.post("/matches/recommend")
+def recommend_match_recruitments(payload: MatchInputPayload, current_user: CurrentUser = AuthUser) -> dict:
+    destination = normalize_text(payload.destination)
+    matches: list[tuple[int, int, str, dict]] = []
+    for recruit in store.list(MATCH_RECRUITMENTS_COLLECTION):
+        if recruit.get("publisherUserId") == current_user.uid:
+            continue
+        if not is_open_recruitment(recruit):
+            continue
+        if normalize_text(recruit.get("destination", "")) != destination:
+            continue
+        start_gap = abs((parse_date_value(recruit.get("startDate", "")) - payload.startDate).days)
+        if start_gap > MATCH_DATE_WINDOW_DAYS:
+            continue
+        stay_gap = abs(int(recruit.get("days", 0)) - payload.days)
+        if stay_gap > MATCH_STAY_WINDOW_DAYS:
+            continue
+        existing_application = find_match_application(recruit["id"], current_user.uid)
+        application_status = existing_application.get("status", "pending") if existing_application else "none"
+        matches.append(
+            (
+                start_gap,
+                stay_gap,
+                recruit.get("createdAt", ""),
+                recommend_card(recruit, application_status),
+            )
+        )
+    matches.sort(key=lambda item: item[2], reverse=True)
+    matches.sort(key=lambda item: (item[0], item[1]))
+    cards = [item[3] for item in matches]
+    return ok({"list": cards, "total": len(cards)})
+
+
+@router.post("/matches/recruitments")
+def create_match_recruitment(payload: MatchInputPayload, current_user: CurrentUser = AuthUser) -> dict:
+    publisher = author_from_user(current_user)
+    now = now_utc().isoformat()
+    item = payload.model_dump(mode="json")
+    item.update(
+        {
+            "publisherUserId": current_user.uid,
+            "publisherNickname": publisher["nickname"],
+            "publisherAvatar": publisher["avatar"],
+            "status": "open",
+            "applicationCount": 0,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+    )
+    created = store.create(MATCH_RECRUITMENTS_COLLECTION, item)
+    return ok(
+        {
+            "id": created["id"],
+            "publisherUserId": created.get("publisherUserId", ""),
+            "destination": created.get("destination", ""),
+            "startDate": created.get("startDate", ""),
+            "days": created.get("days", 0),
+            "status": recruit_status(created),
+            "createdAt": created.get("createdAt"),
+        }
+    )
+
+
+@router.post("/matches/recruitments/{recruit_id}/apply")
+def apply_match_recruitment(recruit_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    recruitment = get_recruitment_item(recruit_id)
+    if recruitment.get("publisherUserId") == current_user.uid:
+        raise HTTPException(status_code=400, detail="cannot apply to your own recruitment")
+    if not is_open_recruitment(recruitment):
+        raise HTTPException(status_code=400, detail="recruitment is not open")
+    if find_match_application(recruit_id, current_user.uid):
+        raise HTTPException(status_code=409, detail="recruitment already applied")
+
+    applicant = author_from_user(current_user)
+    now = now_utc().isoformat()
+    application = store.create(
+        MATCH_APPLICATIONS_COLLECTION,
+        {
+            "recruitId": recruit_id,
+            "publisherUserId": recruitment.get("publisherUserId", ""),
+            "publisherNickname": recruitment.get("publisherNickname", ""),
+            "publisherAvatar": recruitment.get("publisherAvatar", ""),
+            "applicantUserId": current_user.uid,
+            "applicantNickname": applicant["nickname"],
+            "applicantAvatar": applicant["avatar"],
+            "destination": recruitment.get("destination", ""),
+            "startDate": recruitment.get("startDate", ""),
+            "days": recruitment.get("days", 0),
+            "status": "pending",
+            "createdAt": now,
+            "updatedAt": now,
+        },
+    )
+    store.update(
+        MATCH_RECRUITMENTS_COLLECTION,
+        recruit_id,
+        {
+            "applicationCount": int(recruitment.get("applicationCount", 0)) + 1,
+            "updatedAt": now,
+        },
+    )
+    create_match_notification(
+        recruitment.get("publisherUserId", ""),
+        "new_match_application",
+        {"recruitId": recruit_id, "applicationId": application["id"], "applicantUserId": current_user.uid},
+    )
+    return ok({"applicationId": application["id"], "status": application.get("status", "pending")})
+
+
+@router.post("/matches")
+def submit_match_request(payload: LegacyMatchPayload, current_user: CurrentUser = AuthUser) -> dict:
+    now = now_utc().isoformat()
+    item = payload.model_dump(mode="json")
+    item.update(
+        {
+            "userId": current_user.uid,
+            "status": "searching",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+    )
+    created = store.create(LEGACY_MATCH_REQUESTS_COLLECTION, item)
+    return ok(legacy_match_request_model(created))
+
+
+@router.get("/matches")
+def get_match_records(
+    page: int = 1,
+    pageSize: int = 10,
+    status: str = "",
+    current_user: CurrentUser = AuthUser,
+) -> dict:
+    items = [
+        legacy_match_request_model(item)
+        for item in store.list(LEGACY_MATCH_REQUESTS_COLLECTION)
+        if item.get("userId") == current_user.uid and (not status or item.get("status") == status)
+    ]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok(paginate(items, page, pageSize))
+
+
+@router.get("/my/recruitments")
+def get_my_recruitments(current_user: CurrentUser = AuthUser) -> dict:
+    items = [
+        my_recruitment_list_item(item)
+        for item in store.list(MATCH_RECRUITMENTS_COLLECTION)
+        if item.get("publisherUserId") == current_user.uid
+    ]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok({"list": items})
+
+
+@router.get("/my/recruitments/{recruit_id}")
+def get_my_recruitment_detail(recruit_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    recruitment = get_recruitment_item(recruit_id)
+    if recruitment.get("publisherUserId") != current_user.uid:
+        raise HTTPException(status_code=403, detail="not allowed to access this recruitment")
+    application_rows = list_recruitment_applications(recruit_id)
+    application_rows.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    application_rows.sort(key=lambda item: 0 if item.get("status") == "pending" else 1)
+    applications = [recruitment_application_item(item) for item in application_rows]
+    return ok(
+        {
+            "id": recruitment["id"],
+            "destination": recruitment.get("destination", ""),
+            "startDate": recruitment.get("startDate", ""),
+            "days": recruitment.get("days", 0),
+            "status": recruit_status(recruitment),
+            "applications": applications,
+        }
+    )
+
+
+def update_match_application_status(recruit_id: str, application_id: str, new_status: str, current_user: CurrentUser) -> dict:
+    recruitment = get_recruitment_item(recruit_id)
+    if recruitment.get("publisherUserId") != current_user.uid:
+        raise HTTPException(status_code=403, detail="not allowed to operate this recruitment")
+    application = get_application_item(application_id)
+    if application.get("recruitId") != recruit_id:
+        raise HTTPException(status_code=400, detail="application does not belong to this recruitment")
+    if application.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="application is already processed")
+    updated = store.update(
+        MATCH_APPLICATIONS_COLLECTION,
+        application_id,
+        {"status": new_status, "updatedAt": now_utc().isoformat()},
+    )
+    create_match_notification(
+        application.get("applicantUserId", ""),
+        f"match_application_{new_status}",
+        {"recruitId": recruit_id, "applicationId": application_id, "status": new_status},
+    )
+    return {"applicationId": updated["id"], "status": updated.get("status", new_status)}
+
+
+@router.post("/my/recruitments/{recruit_id}/applications/{application_id}/approve")
+def approve_match_application(recruit_id: str, application_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    return ok(update_match_application_status(recruit_id, application_id, "approved", current_user))
+
+
+@router.post("/my/recruitments/{recruit_id}/applications/{application_id}/reject")
+def reject_match_application(recruit_id: str, application_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    return ok(update_match_application_status(recruit_id, application_id, "rejected", current_user))
+
+
+@router.get("/my/match-applications")
+def get_my_match_applications(current_user: CurrentUser = AuthUser) -> dict:
+    items = [
+        my_match_application_item(item)
+        for item in store.list(MATCH_APPLICATIONS_COLLECTION)
+        if item.get("applicantUserId") == current_user.uid
+    ]
+    items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+    return ok({"list": items})
+
+
+@router.get("/matches/{match_id}")
+def get_match_detail(match_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    item = store.get(LEGACY_MATCH_REQUESTS_COLLECTION, match_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="match record not found")
+    if item.get("userId") != current_user.uid:
+        raise HTTPException(status_code=403, detail="not allowed to access this match record")
+    return ok(legacy_match_request_model(item))
+
+
+@router.post("/ai/generate-strategy")
+def generate_strategy_for_frontend(payload: AiPayload, current_user: CurrentUser = AuthUser) -> dict:
+    result = generate_strategy(
+        GenerateStrategyRequest(
+            destination=payload.destination,
+            days=payload.days,
+            budget=payload.budget,
+            hotel_req=payload.hotelRequirement,
+            allergies=payload.allergies,
+            pace=payload.pace,
+            group_type=payload.groupType,
+        )
+    )
+    data = result.model_dump()
+    data["dailyPlans"] = data.pop("daily_plans")
+    return ok(build_ai_strategy_draft(payload, data))
+
+
+@router.post("/upload/image")
+async def upload_image_for_frontend(request: Request, file: UploadFile = File(...), current_user: CurrentUser = AuthUser) -> dict:
+    uploaded = await upload_media(file, "image", current_user.uid, str(request.base_url))
+    return ok({"url": uploaded.url, "fileName": uploaded.filename})
+
+
+@router.post("/upload/video")
+async def upload_video_for_frontend(request: Request, file: UploadFile = File(...), current_user: CurrentUser = AuthUser) -> dict:
+    uploaded = await upload_media(file, "video", current_user.uid, str(request.base_url))
+    return ok({"url": uploaded.url, "fileName": uploaded.filename, "coverUrl": ""})
