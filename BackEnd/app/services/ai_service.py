@@ -40,6 +40,59 @@ def _extract_json(text: str) -> dict:
     return json.loads(cleaned)
 
 
+def generate_safe_meeting_place(destination: str, preference_tags: list[str] | None = None, preference_text: str = "") -> str:
+    destination = destination.strip() or "目的地"
+    fallback = f"{destination}主城区地标广场附近"
+    if not settings.dashscope_api_key or "你的阿里云百炼API Key" in settings.dashscope_api_key:
+        return fallback
+
+    tags_text = "、".join(tag.strip() for tag in preference_tags or [] if tag.strip()) or "无"
+    extra_text = preference_text.strip() or "无"
+    prompt = f"""
+请为两位第一次见面的旅行搭子推荐一个安全见面地点。
+
+要求：
+1. 地点在 {destination}
+2. 必须适合白天初次见面
+3. 必须是公共地点
+4. 必须交通方便、容易辨认、人流较多
+5. 避免偏僻、封闭、夜间、私人住宅场景
+
+用户偏好标签：{tags_text}
+补充偏好：{extra_text}
+
+只返回一句简体中文地点文本，不要解释，不要 Markdown，不要序号。
+"""
+    url = settings.dashscope_base_url.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": settings.dashscope_model,
+        "messages": [
+            {"role": "system", "content": "你是旅行安全助手，回答必须简洁且可直接展示给用户。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.4,
+    }
+    try:
+        response = httpx.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {settings.dashscope_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30,
+        )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"].strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*", "", content)
+            content = re.sub(r"\s*```$", "", content)
+        content = content.splitlines()[0].strip(" -：:")
+        return content or fallback
+    except Exception:
+        return fallback
+
+
 def generate_strategy(req: GenerateStrategyRequest) -> GeneratedStrategy:
     if not settings.dashscope_api_key or "你的阿里云百炼API Key" in settings.dashscope_api_key:
         return _fallback_strategy(req)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+import re
+from datetime import date, datetime, time, timedelta, timezone
 from secrets import token_urlsafe
 from typing import Any
 
@@ -11,7 +12,7 @@ from app.core.config import settings
 from app.core.security import AuthUser, CurrentUser
 from app.models.ai import GenerateStrategyRequest
 from app.models.common import now_utc
-from app.services.ai_service import generate_strategy
+from app.services.ai_service import generate_safe_meeting_place, generate_strategy
 from app.services.auth_service import (
     authenticate_password_user,
     authenticate_phone_user,
@@ -32,8 +33,26 @@ MATCH_RECRUITMENTS_COLLECTION = "fe_match_recruitments"
 MATCH_APPLICATIONS_COLLECTION = "fe_match_applications"
 MATCH_NOTIFICATIONS_COLLECTION = "fe_notifications"
 LEGACY_MATCH_REQUESTS_COLLECTION = "fe_match_requests"
+REALTIME_MATCH_REQUESTS_COLLECTION = "fe_realtime_match_requests"
+REALTIME_MATCH_CANDIDATES_COLLECTION = "fe_realtime_match_candidates"
+REALTIME_MATCH_PAIRS_COLLECTION = "fe_realtime_match_pairs"
 MATCH_DATE_WINDOW_DAYS = 3
 MATCH_STAY_WINDOW_DAYS = 2
+REALTIME_MATCH_DECISION_MINUTES = 15
+REALTIME_MATCH_MEET_HOUR = 10
+REALTIME_MATCH_TIMEZONE = timezone(timedelta(hours=8))
+REALTIME_MATCH_ACTIVE_STATUSES = {"pending", "matched_waiting_decision", "matched_accepted"}
+REALTIME_MATCH_TERMINAL_STATUSES = {"failed", "cancelled", "finished"}
+REALTIME_MATCH_PREFERENCE_TAGS = [
+    "特种兵",
+    "慢旅行",
+    "拍照",
+    "美食",
+    "自然风光",
+    "人文历史",
+    "早起",
+    "夜景",
+]
 
 
 def ok(data: Any = None, message: str = "ok") -> dict:
@@ -469,6 +488,8 @@ def notification_title(notification_type: str) -> tuple[str, str]:
         "new_match_application": ("搭子申请", "你收到了一条新的搭子申请"),
         "match_application_approved": ("搭子结果", "你的搭子申请已通过"),
         "match_application_rejected": ("搭子结果", "你的搭子申请未通过"),
+        "realtime_match_found": ("搭子匹配", "系统为你找到了一位新的候选搭子"),
+        "realtime_match_confirmed": ("搭子确认", "你和对方已互相同意，可以准备见面了"),
     }
     return mapping.get(notification_type, ("系统通知", "你收到一条新的消息"))
 
@@ -543,6 +564,476 @@ def create_match_notification(user_id: str, notification_type: str, data: dict) 
     )
 
 
+def is_hidden_recruitment(raw: dict) -> bool:
+    return raw.get("source") == "realtime" and raw.get("visibility") == "hidden"
+
+
+def normalize_preference_tags(tags: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for tag in tags:
+        value = tag.strip()
+        if not value:
+            continue
+        if value not in REALTIME_MATCH_PREFERENCE_TAGS:
+            raise HTTPException(status_code=400, detail=f"unsupported preference tag: {value}")
+        if value not in cleaned:
+            cleaned.append(value)
+    return cleaned
+
+
+def extract_text_keywords(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[A-Za-z0-9\u4e00-\u9fff]{2,}", normalize_text(value))
+        if len(token) >= 2
+    }
+
+
+def parse_datetime_value(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def build_match_deadline(travel_start_date: date) -> datetime:
+    return datetime.combine(travel_start_date, time.min, tzinfo=REALTIME_MATCH_TIMEZONE) - timedelta(hours=48)
+
+
+def build_meet_time(travel_start_date: date) -> datetime:
+    return datetime.combine(travel_start_date, time(REALTIME_MATCH_MEET_HOUR), tzinfo=REALTIME_MATCH_TIMEZONE)
+
+
+def date_range_overlap_days(start_a: date, end_a: date, start_b: date, end_b: date) -> int:
+    latest_start = max(start_a, start_b)
+    earliest_end = min(end_a, end_b)
+    if latest_start > earliest_end:
+        return 0
+    return (earliest_end - latest_start).days + 1
+
+
+def save_realtime_request(raw: dict) -> dict:
+    return store.upsert(REALTIME_MATCH_REQUESTS_COLLECTION, raw["id"], raw)
+
+
+def save_realtime_candidate(raw: dict) -> dict:
+    return store.upsert(REALTIME_MATCH_CANDIDATES_COLLECTION, raw["id"], raw)
+
+
+def save_realtime_pair(raw: dict) -> dict:
+    return store.upsert(REALTIME_MATCH_PAIRS_COLLECTION, raw["id"], raw)
+
+
+def get_realtime_request(request_id: str) -> dict | None:
+    return store.get(REALTIME_MATCH_REQUESTS_COLLECTION, request_id)
+
+
+def get_realtime_candidate(candidate_id: str) -> dict | None:
+    return store.get(REALTIME_MATCH_CANDIDATES_COLLECTION, candidate_id)
+
+
+def get_realtime_pair(pair_id: str) -> dict | None:
+    return store.get(REALTIME_MATCH_PAIRS_COLLECTION, pair_id)
+
+
+def list_realtime_requests() -> list[dict]:
+    return store.list(REALTIME_MATCH_REQUESTS_COLLECTION)
+
+
+def list_realtime_candidates() -> list[dict]:
+    return store.list(REALTIME_MATCH_CANDIDATES_COLLECTION)
+
+
+def list_realtime_pairs() -> list[dict]:
+    return store.list(REALTIME_MATCH_PAIRS_COLLECTION)
+
+
+def get_hidden_recruitment_for_request(request_id: str) -> dict | None:
+    for item in store.list(MATCH_RECRUITMENTS_COLLECTION):
+        if is_hidden_recruitment(item) and item.get("requestId") == request_id:
+            return item
+    return None
+
+
+def set_hidden_recruitment_status(request_id: str, status: str) -> None:
+    recruitment = get_hidden_recruitment_for_request(request_id)
+    if recruitment:
+        recruitment["status"] = status
+        recruitment["updatedAt"] = now_utc().isoformat()
+        store.upsert(MATCH_RECRUITMENTS_COLLECTION, recruitment["id"], recruitment)
+
+
+def get_user_latest_realtime_request(user_id: str) -> dict | None:
+    items = [item for item in list_realtime_requests() if item.get("user_id") == user_id]
+    if not items:
+        return None
+    items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return items[0]
+
+
+def get_user_active_realtime_request(user_id: str) -> dict | None:
+    items = [
+        item
+        for item in list_realtime_requests()
+        if item.get("user_id") == user_id and item.get("status") in REALTIME_MATCH_ACTIVE_STATUSES
+    ]
+    if not items:
+        return None
+    items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return items[0]
+
+
+def get_realtime_request_or_404(request_id: str) -> dict:
+    request = get_realtime_request(request_id)
+    if not request:
+        raise HTTPException(status_code=404, detail="match request not found")
+    return request
+
+
+def get_realtime_candidate_or_404(candidate_id: str) -> dict:
+    candidate = get_realtime_candidate(candidate_id)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="match candidate not found")
+    return candidate
+
+
+def get_realtime_pair_or_404(pair_id: str) -> dict:
+    pair = get_realtime_pair(pair_id)
+    if not pair:
+        raise HTTPException(status_code=404, detail="match pair not found")
+    return pair
+
+
+def build_match_summary(request: dict, peer_request: dict) -> str:
+    shared_tags = [
+        tag
+        for tag in request.get("preference_tags", [])
+        if tag in peer_request.get("preference_tags", [])
+    ]
+    if shared_tags:
+        preview = "、".join(shared_tags[:2])
+        return f"你们都偏好{preview}，旅行节奏更容易合拍"
+
+    shared_keywords = sorted(
+        extract_text_keywords(request.get("preference_text", ""))
+        & extract_text_keywords(peer_request.get("preference_text", ""))
+    )
+    if shared_keywords:
+        return f"你们都提到了“{shared_keywords[0]}”，这趟旅途可能很同频"
+
+    return "你们的旅行地点和时间高度重合，适合先见面聊聊"
+
+
+def build_realtime_candidate_response(candidate: dict) -> dict:
+    return {
+        "candidate_id": candidate["id"],
+        "peer_user_id": candidate.get("peer_user_id", ""),
+        "peer_nickname": candidate.get("peer_nickname", ""),
+        "peer_avatar": candidate.get("peer_avatar", ""),
+        "meeting_place_text": candidate.get("meeting_place_text", ""),
+        "match_summary": candidate.get("match_summary", ""),
+        "decision_expires_at": candidate.get("decision_expires_at"),
+        "my_decision": candidate.get("my_decision", "pending"),
+        "peer_decision": candidate.get("peer_decision", "pending"),
+    }
+
+
+def build_realtime_pair_response(pair: dict, current_user_id: str) -> dict:
+    is_user_a = pair.get("user_a_id") == current_user_id
+    return {
+        "pair_id": pair["id"],
+        "peer_user_id": pair.get("user_b_id", "") if is_user_a else pair.get("user_a_id", ""),
+        "peer_nickname": pair.get("user_b_nickname", "") if is_user_a else pair.get("user_a_nickname", ""),
+        "peer_avatar": pair.get("user_b_avatar", "") if is_user_a else pair.get("user_a_avatar", ""),
+        "meet_time": pair.get("meet_time"),
+        "meet_location_text": pair.get("meet_location_text", ""),
+        "my_remark": pair.get("remark_a", "") if is_user_a else pair.get("remark_b", ""),
+        "peer_remark": pair.get("remark_b", "") if is_user_a else pair.get("remark_a", ""),
+    }
+
+
+def build_realtime_state_response(request: dict | None, current_user_id: str) -> dict:
+    if not request:
+        return {"active": False}
+
+    candidate = (
+        get_realtime_candidate(request.get("current_candidate_id", ""))
+        if request.get("current_candidate_id")
+        else None
+    )
+    pair = (
+        get_realtime_pair(request.get("current_pair_id", ""))
+        if request.get("current_pair_id")
+        else None
+    )
+    status = request.get("status", "")
+    return {
+        "active": status in REALTIME_MATCH_ACTIVE_STATUSES,
+        "request_id": request["id"],
+        "status": status,
+        "destination": request.get("destination", ""),
+        "travel_start_date": request.get("travel_start_date", ""),
+        "travel_end_date": request.get("travel_end_date", ""),
+        "preference_tags": request.get("preference_tags", []),
+        "preference_text": request.get("preference_text", ""),
+        "match_deadline_at": request.get("match_deadline_at"),
+        "candidate": build_realtime_candidate_response(candidate) if candidate and status == "matched_waiting_decision" else None,
+        "pair": build_realtime_pair_response(pair, current_user_id) if pair and status == "matched_accepted" else None,
+    }
+
+
+def has_rejected_or_expired_history(request_id: str, peer_request_id: str) -> bool:
+    pair_keys = {(request_id, peer_request_id), (peer_request_id, request_id)}
+    for item in list_realtime_candidates():
+        if (item.get("request_id"), item.get("peer_request_id")) not in pair_keys:
+            continue
+        if item.get("status") in {"rejected", "expired"}:
+            return True
+    return False
+
+
+def reopen_request_or_fail(request_id: str) -> None:
+    request = get_realtime_request(request_id)
+    if not request or request.get("status") == "matched_accepted":
+        return
+
+    now = now_utc()
+    deadline = parse_datetime_value(request["match_deadline_at"])
+    request["current_candidate_id"] = ""
+    request["updated_at"] = now.isoformat()
+    if now >= deadline:
+        request["status"] = "failed"
+        set_hidden_recruitment_status(request_id, "closed")
+    else:
+        request["status"] = "pending"
+        set_hidden_recruitment_status(request_id, "open")
+    save_realtime_request(request)
+
+
+def sync_realtime_match_state() -> None:
+    now = now_utc()
+
+    for pair in list_realtime_pairs():
+        if pair.get("status") != "active":
+            continue
+        meet_time = parse_datetime_value(pair["meet_time"])
+        end_of_day = datetime.combine(meet_time.date(), time.max, tzinfo=meet_time.tzinfo or timezone.utc)
+        if now < end_of_day:
+            continue
+        pair["status"] = "finished"
+        pair["updated_at"] = now.isoformat()
+        save_realtime_pair(pair)
+        for request_id in (pair.get("request_a_id", ""), pair.get("request_b_id", "")):
+            request = get_realtime_request(request_id)
+            if not request:
+                continue
+            request["status"] = "finished"
+            request["updated_at"] = now.isoformat()
+            save_realtime_request(request)
+            set_hidden_recruitment_status(request_id, "closed")
+
+    processed_candidate_ids: set[str] = set()
+    for candidate in list_realtime_candidates():
+        if candidate.get("id") in processed_candidate_ids:
+            continue
+        if candidate.get("status") != "pending_decision":
+            continue
+        decision_expires_at = parse_datetime_value(candidate["decision_expires_at"])
+        if now < decision_expires_at:
+            continue
+
+        peer_candidate = get_realtime_candidate(candidate.get("peer_candidate_id", ""))
+        group = [candidate]
+        if peer_candidate:
+            group.append(peer_candidate)
+
+        for item in group:
+            processed_candidate_ids.add(item["id"])
+            item["status"] = "expired"
+            item["my_decision"] = "expired"
+            item["peer_decision"] = "expired"
+            item["updated_at"] = now.isoformat()
+            save_realtime_candidate(item)
+
+        reopen_request_or_fail(candidate.get("request_id", ""))
+        reopen_request_or_fail(candidate.get("peer_request_id", ""))
+
+    for request in list_realtime_requests():
+        if request.get("status") != "pending":
+            continue
+        if now < parse_datetime_value(request["match_deadline_at"]):
+            continue
+        request["status"] = "failed"
+        request["updated_at"] = now.isoformat()
+        save_realtime_request(request)
+        set_hidden_recruitment_status(request["id"], "closed")
+
+
+def build_hidden_recruitment_payload(payload: dict, request_id: str, current_user: CurrentUser) -> dict:
+    author = author_from_user(current_user)
+    now = now_utc().isoformat()
+    return {
+        "publisherUserId": current_user.uid,
+        "publisherNickname": author["nickname"],
+        "publisherAvatar": author["avatar"],
+        "destination": payload.get("destination", ""),
+        "travelStartDate": payload.get("travel_start_date", ""),
+        "travelEndDate": payload.get("travel_end_date", ""),
+        "preferenceTags": payload.get("preference_tags", []),
+        "preferenceText": payload.get("preference_text", ""),
+        "source": "realtime",
+        "visibility": "hidden",
+        "requestId": request_id,
+        "status": "open",
+        "applicationCount": 0,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+
+def choose_best_peer_request(request: dict) -> dict | None:
+    current_start = parse_date_value(request["travel_start_date"])
+    current_end = parse_date_value(request["travel_end_date"])
+    current_tags = set(request.get("preference_tags", []))
+    current_keywords = extract_text_keywords(request.get("preference_text", ""))
+    ranked: list[tuple[int, int, int, str, dict]] = []
+
+    for peer_request in list_realtime_requests():
+        if peer_request["id"] == request["id"]:
+            continue
+        if peer_request.get("user_id") == request.get("user_id"):
+            continue
+        if peer_request.get("status") != "pending":
+            continue
+        if peer_request.get("current_candidate_id") or peer_request.get("current_pair_id"):
+            continue
+        if has_rejected_or_expired_history(request["id"], peer_request["id"]):
+            continue
+        if normalize_text(peer_request.get("destination", "")) != normalize_text(request.get("destination", "")):
+            continue
+
+        peer_start = parse_date_value(peer_request["travel_start_date"])
+        peer_end = parse_date_value(peer_request["travel_end_date"])
+        overlap_days = date_range_overlap_days(current_start, current_end, peer_start, peer_end)
+        if overlap_days <= 0:
+            continue
+
+        shared_tags = len(current_tags & set(peer_request.get("preference_tags", [])))
+        shared_keywords = len(current_keywords & extract_text_keywords(peer_request.get("preference_text", "")))
+        ranked.append(
+            (
+                -shared_tags,
+                -shared_keywords,
+                -overlap_days,
+                peer_request.get("created_at", ""),
+                peer_request,
+            )
+        )
+
+    if not ranked:
+        return None
+
+    ranked.sort(key=lambda item: item[:4])
+    return ranked[0][4]
+
+
+def create_realtime_candidate_pair(request: dict, peer_request: dict) -> None:
+    summary_for_request = build_match_summary(request, peer_request)
+    summary_for_peer = build_match_summary(peer_request, request)
+    shared_tags = [
+        tag
+        for tag in request.get("preference_tags", [])
+        if tag in peer_request.get("preference_tags", [])
+    ]
+    meeting_place_text = generate_safe_meeting_place(
+        request.get("destination", ""),
+        shared_tags,
+        f"{request.get('preference_text', '')} {peer_request.get('preference_text', '')}".strip(),
+    )
+    now = now_utc()
+    decision_expires_at = (now + timedelta(minutes=REALTIME_MATCH_DECISION_MINUTES)).isoformat()
+
+    peer_profile = store.get("users", peer_request.get("user_id", "")) or {}
+    request_profile = store.get("users", request.get("user_id", "")) or {}
+
+    request_candidate = store.create(
+        REALTIME_MATCH_CANDIDATES_COLLECTION,
+        {
+            "request_id": request["id"],
+            "peer_request_id": peer_request["id"],
+            "user_id": request.get("user_id", ""),
+            "peer_user_id": peer_request.get("user_id", ""),
+            "peer_avatar": peer_profile.get("photo_url", ""),
+            "peer_nickname": peer_profile.get("display_name", peer_request.get("user_id", "")),
+            "meeting_place_text": meeting_place_text,
+            "match_summary": summary_for_request,
+            "my_decision": "pending",
+            "peer_decision": "pending",
+            "status": "pending_decision",
+            "decision_expires_at": decision_expires_at,
+            "peer_candidate_id": "",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        },
+    )
+    peer_candidate = store.create(
+        REALTIME_MATCH_CANDIDATES_COLLECTION,
+        {
+            "request_id": peer_request["id"],
+            "peer_request_id": request["id"],
+            "user_id": peer_request.get("user_id", ""),
+            "peer_user_id": request.get("user_id", ""),
+            "peer_avatar": request_profile.get("photo_url", ""),
+            "peer_nickname": request_profile.get("display_name", request.get("user_id", "")),
+            "meeting_place_text": meeting_place_text,
+            "match_summary": summary_for_peer,
+            "my_decision": "pending",
+            "peer_decision": "pending",
+            "status": "pending_decision",
+            "decision_expires_at": decision_expires_at,
+            "peer_candidate_id": request_candidate["id"],
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        },
+    )
+    request_candidate["peer_candidate_id"] = peer_candidate["id"]
+    save_realtime_candidate(request_candidate)
+
+    request["status"] = "matched_waiting_decision"
+    request["current_candidate_id"] = request_candidate["id"]
+    request["updated_at"] = now.isoformat()
+    save_realtime_request(request)
+    set_hidden_recruitment_status(request["id"], "closed")
+
+    peer_request["status"] = "matched_waiting_decision"
+    peer_request["current_candidate_id"] = peer_candidate["id"]
+    peer_request["updated_at"] = now.isoformat()
+    save_realtime_request(peer_request)
+    set_hidden_recruitment_status(peer_request["id"], "closed")
+
+    create_match_notification(
+        request.get("user_id", ""),
+        "realtime_match_found",
+        {"requestId": request["id"], "candidateId": request_candidate["id"]},
+    )
+    create_match_notification(
+        peer_request.get("user_id", ""),
+        "realtime_match_found",
+        {"requestId": peer_request["id"], "candidateId": peer_candidate["id"]},
+    )
+
+
+def try_match_pending_request(request: dict) -> dict:
+    if request.get("status") != "pending":
+        return request
+    if request.get("current_candidate_id") or request.get("current_pair_id"):
+        return request
+
+    peer_request = choose_best_peer_request(request)
+    if not peer_request:
+        return request
+
+    create_realtime_candidate_pair(request, peer_request)
+    return get_realtime_request(request["id"]) or request
+
+
 class DemoLoginPayload(BaseModel):
     nickname: str = "远方旅客"
     avatar: str = ""
@@ -614,6 +1105,18 @@ class LegacyMatchPayload(MatchInputPayload):
     genderPreference: str = "不限"
     budget: str = "中等"
     remarks: str = ""
+
+
+class RealtimeMatchPayload(BaseModel):
+    destination: str = Field(min_length=1, max_length=100)
+    travel_start_date: date
+    travel_end_date: date
+    preference_tags: list[str] = Field(default_factory=list)
+    preference_text: str = ""
+
+
+class RealtimeRemarkPayload(BaseModel):
+    remark: str
 
 
 class AiPayload(BaseModel):
@@ -1143,6 +1646,8 @@ def recommend_match_recruitments(payload: MatchInputPayload, current_user: Curre
     for recruit in store.list(MATCH_RECRUITMENTS_COLLECTION):
         if recruit.get("publisherUserId") == current_user.uid:
             continue
+        if is_hidden_recruitment(recruit):
+            continue
         if not is_open_recruitment(recruit):
             continue
         if normalize_text(recruit.get("destination", "")) != destination:
@@ -1202,6 +1707,8 @@ def create_match_recruitment(payload: MatchInputPayload, current_user: CurrentUs
 @router.post("/matches/recruitments/{recruit_id}/apply")
 def apply_match_recruitment(recruit_id: str, current_user: CurrentUser = AuthUser) -> dict:
     recruitment = get_recruitment_item(recruit_id)
+    if is_hidden_recruitment(recruitment):
+        raise HTTPException(status_code=404, detail="recruitment not found")
     if recruitment.get("publisherUserId") == current_user.uid:
         raise HTTPException(status_code=400, detail="cannot apply to your own recruitment")
     if not is_open_recruitment(recruitment):
@@ -1245,6 +1752,263 @@ def apply_match_recruitment(recruit_id: str, current_user: CurrentUser = AuthUse
     return ok({"applicationId": application["id"], "status": application.get("status", "pending")})
 
 
+@router.post("/match/realtime")
+def create_realtime_match(payload: RealtimeMatchPayload, current_user: CurrentUser = AuthUser) -> dict:
+    sync_realtime_match_state()
+
+    if payload.travel_end_date < payload.travel_start_date:
+        raise HTTPException(status_code=400, detail="travel_end_date must be on or after travel_start_date")
+
+    preference_tags = normalize_preference_tags(payload.preference_tags)
+    preference_text = payload.preference_text.strip()
+    if not preference_tags and not preference_text:
+        raise HTTPException(status_code=400, detail="at least one preference tag or preference text is required")
+
+    match_deadline = build_match_deadline(payload.travel_start_date)
+    if match_deadline <= now_utc():
+        raise HTTPException(status_code=400, detail="travel_start_date must be at least 48 hours later")
+
+    active_request = get_user_active_realtime_request(current_user.uid)
+    now = now_utc().isoformat()
+    if active_request:
+        if active_request.get("status") == "pending":
+            active_request["status"] = "cancelled"
+            active_request["updated_at"] = now
+            save_realtime_request(active_request)
+            set_hidden_recruitment_status(active_request["id"], "closed")
+        else:
+            raise HTTPException(status_code=409, detail="active realtime match request already exists")
+
+    item = payload.model_dump(mode="json")
+    item["destination"] = item["destination"].strip()
+    item["preference_tags"] = preference_tags
+    item["preference_text"] = preference_text
+    item.update(
+        {
+            "user_id": current_user.uid,
+            "status": "pending",
+            "match_deadline_at": match_deadline.isoformat(),
+            "current_candidate_id": "",
+            "current_pair_id": "",
+            "recruitment_id": "",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    created = store.create(REALTIME_MATCH_REQUESTS_COLLECTION, item)
+    hidden_recruitment = store.create(
+        MATCH_RECRUITMENTS_COLLECTION,
+        build_hidden_recruitment_payload(created, created["id"], current_user),
+    )
+    created["recruitment_id"] = hidden_recruitment["id"]
+    save_realtime_request(created)
+
+    current_request = try_match_pending_request(created)
+    return ok(
+        {
+            "request_id": current_request["id"],
+            "status": current_request.get("status", "pending"),
+            "match_deadline_at": current_request.get("match_deadline_at"),
+        }
+    )
+
+
+@router.get("/match/realtime/current")
+def get_current_realtime_match(current_user: CurrentUser = AuthUser) -> dict:
+    sync_realtime_match_state()
+
+    request = get_user_latest_realtime_request(current_user.uid)
+    if not request:
+        return ok({"active": False})
+
+    if request.get("status") == "pending":
+        request = try_match_pending_request(request)
+
+    return ok(build_realtime_state_response(request, current_user.uid))
+
+
+@router.post("/match/realtime/candidate/{candidate_id}/accept")
+def accept_realtime_candidate(candidate_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    sync_realtime_match_state()
+
+    candidate = get_realtime_candidate_or_404(candidate_id)
+    if candidate.get("user_id") != current_user.uid:
+        raise HTTPException(status_code=403, detail="not allowed to operate this candidate")
+
+    request = get_realtime_request_or_404(candidate.get("request_id", ""))
+    if request.get("status") == "matched_accepted" and request.get("current_pair_id"):
+        pair = get_realtime_pair_or_404(request["current_pair_id"])
+        return ok({"status": "matched_accepted", "pair": build_realtime_pair_response(pair, current_user.uid)})
+    if candidate.get("status") != "pending_decision":
+        raise HTTPException(status_code=400, detail="candidate is not waiting for decision")
+
+    peer_candidate = get_realtime_candidate_or_404(candidate.get("peer_candidate_id", ""))
+    peer_request = get_realtime_request_or_404(candidate.get("peer_request_id", ""))
+
+    if candidate.get("my_decision") == "accepted" and peer_candidate.get("my_decision") != "accepted":
+        candidate["peer_decision"] = peer_candidate.get("my_decision", "pending")
+        return ok({"status": "matched_waiting_decision", "candidate": build_realtime_candidate_response(candidate)})
+
+    now = now_utc().isoformat()
+    peer_already_accepted = peer_candidate.get("my_decision") == "accepted"
+
+    candidate["my_decision"] = "accepted"
+    candidate["peer_decision"] = "accepted" if peer_already_accepted else "pending"
+    candidate["updated_at"] = now
+    if peer_already_accepted:
+        candidate["status"] = "accepted"
+    save_realtime_candidate(candidate)
+
+    peer_candidate["peer_decision"] = "accepted"
+    peer_candidate["updated_at"] = now
+    if peer_already_accepted:
+        peer_candidate["status"] = "accepted"
+    save_realtime_candidate(peer_candidate)
+
+    if not peer_already_accepted:
+        return ok({"status": "matched_waiting_decision", "candidate": build_realtime_candidate_response(candidate)})
+
+    meet_day = max(
+        parse_date_value(request["travel_start_date"]),
+        parse_date_value(peer_request["travel_start_date"]),
+    )
+    request_profile = store.get("users", request.get("user_id", "")) or {}
+    peer_profile = store.get("users", peer_request.get("user_id", "")) or {}
+    pair = store.create(
+        REALTIME_MATCH_PAIRS_COLLECTION,
+        {
+            "request_a_id": request["id"],
+            "request_b_id": peer_request["id"],
+            "user_a_id": request.get("user_id", ""),
+            "user_b_id": peer_request.get("user_id", ""),
+            "user_a_nickname": request_profile.get("display_name", request.get("user_id", "")),
+            "user_b_nickname": peer_profile.get("display_name", peer_request.get("user_id", "")),
+            "user_a_avatar": request_profile.get("photo_url", ""),
+            "user_b_avatar": peer_profile.get("photo_url", ""),
+            "meet_time": build_meet_time(meet_day).isoformat(),
+            "meet_location_text": candidate.get("meeting_place_text", ""),
+            "remark_a": "",
+            "remark_b": "",
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+
+    request["status"] = "matched_accepted"
+    request["current_pair_id"] = pair["id"]
+    request["updated_at"] = now
+    save_realtime_request(request)
+    set_hidden_recruitment_status(request["id"], "closed")
+
+    peer_request["status"] = "matched_accepted"
+    peer_request["current_pair_id"] = pair["id"]
+    peer_request["updated_at"] = now
+    save_realtime_request(peer_request)
+    set_hidden_recruitment_status(peer_request["id"], "closed")
+
+    create_match_notification(
+        request.get("user_id", ""),
+        "realtime_match_confirmed",
+        {"requestId": request["id"], "pairId": pair["id"]},
+    )
+    create_match_notification(
+        peer_request.get("user_id", ""),
+        "realtime_match_confirmed",
+        {"requestId": peer_request["id"], "pairId": pair["id"]},
+    )
+    return ok({"status": "matched_accepted", "pair": build_realtime_pair_response(pair, current_user.uid)})
+
+
+@router.post("/match/realtime/candidate/{candidate_id}/reject")
+def reject_realtime_candidate(candidate_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    sync_realtime_match_state()
+
+    candidate = get_realtime_candidate_or_404(candidate_id)
+    if candidate.get("user_id") != current_user.uid:
+        raise HTTPException(status_code=403, detail="not allowed to operate this candidate")
+
+    request = get_realtime_request_or_404(candidate.get("request_id", ""))
+    if request.get("status") == "matched_accepted":
+        raise HTTPException(status_code=400, detail="matched pair is already confirmed")
+    if candidate.get("status") == "rejected":
+        latest_request = get_realtime_request_or_404(candidate.get("request_id", ""))
+        return ok({"status": latest_request.get("status", "pending")})
+    if candidate.get("status") != "pending_decision":
+        raise HTTPException(status_code=400, detail="candidate is not waiting for decision")
+
+    peer_candidate = get_realtime_candidate_or_404(candidate.get("peer_candidate_id", ""))
+    now = now_utc().isoformat()
+
+    candidate["status"] = "rejected"
+    candidate["my_decision"] = "rejected"
+    candidate["peer_decision"] = peer_candidate.get("my_decision", "pending")
+    candidate["updated_at"] = now
+    save_realtime_candidate(candidate)
+
+    peer_candidate["status"] = "rejected"
+    peer_candidate["peer_decision"] = "rejected"
+    peer_candidate["updated_at"] = now
+    save_realtime_candidate(peer_candidate)
+
+    reopen_request_or_fail(candidate.get("request_id", ""))
+    reopen_request_or_fail(candidate.get("peer_request_id", ""))
+
+    latest_request = get_realtime_request_or_404(candidate.get("request_id", ""))
+    return ok({"status": latest_request.get("status", "pending")})
+
+
+@router.post("/match/realtime/pair/{pair_id}/remark")
+def submit_realtime_pair_remark(
+    pair_id: str,
+    payload: RealtimeRemarkPayload,
+    current_user: CurrentUser = AuthUser,
+) -> dict:
+    sync_realtime_match_state()
+
+    pair = get_realtime_pair_or_404(pair_id)
+    is_user_a = pair.get("user_a_id") == current_user.uid
+    is_user_b = pair.get("user_b_id") == current_user.uid
+    if not is_user_a and not is_user_b:
+        raise HTTPException(status_code=403, detail="not allowed to access this pair")
+    if pair.get("status") != "active":
+        raise HTTPException(status_code=400, detail="pair is not active")
+
+    remark = payload.remark.strip()
+    if not remark:
+        raise HTTPException(status_code=400, detail="remark is required")
+
+    now = now_utc().isoformat()
+    if is_user_a:
+        if pair.get("remark_a", "").strip():
+            raise HTTPException(status_code=409, detail="remark already submitted")
+        pair["remark_a"] = remark
+    else:
+        if pair.get("remark_b", "").strip():
+            raise HTTPException(status_code=409, detail="remark already submitted")
+        pair["remark_b"] = remark
+    pair["updated_at"] = now
+    save_realtime_pair(pair)
+    return ok(build_realtime_pair_response(pair, current_user.uid))
+
+
+@router.post("/match/realtime/{request_id}/cancel")
+def cancel_realtime_match(request_id: str, current_user: CurrentUser = AuthUser) -> dict:
+    sync_realtime_match_state()
+
+    request = get_realtime_request_or_404(request_id)
+    if request.get("user_id") != current_user.uid:
+        raise HTTPException(status_code=403, detail="not allowed to cancel this request")
+    if request.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="only pending request can be cancelled")
+
+    request["status"] = "cancelled"
+    request["updated_at"] = now_utc().isoformat()
+    save_realtime_request(request)
+    set_hidden_recruitment_status(request_id, "closed")
+    return ok({"status": "cancelled"})
+
+
 @router.post("/matches")
 def submit_match_request(payload: LegacyMatchPayload, current_user: CurrentUser = AuthUser) -> dict:
     now = now_utc().isoformat()
@@ -1282,7 +2046,7 @@ def get_my_recruitments(current_user: CurrentUser = AuthUser) -> dict:
     items = [
         my_recruitment_list_item(item)
         for item in store.list(MATCH_RECRUITMENTS_COLLECTION)
-        if item.get("publisherUserId") == current_user.uid
+        if item.get("publisherUserId") == current_user.uid and not is_hidden_recruitment(item)
     ]
     items.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
     return ok({"list": items})
@@ -1291,6 +2055,8 @@ def get_my_recruitments(current_user: CurrentUser = AuthUser) -> dict:
 @router.get("/my/recruitments/{recruit_id}")
 def get_my_recruitment_detail(recruit_id: str, current_user: CurrentUser = AuthUser) -> dict:
     recruitment = get_recruitment_item(recruit_id)
+    if is_hidden_recruitment(recruitment):
+        raise HTTPException(status_code=404, detail="recruitment not found")
     if recruitment.get("publisherUserId") != current_user.uid:
         raise HTTPException(status_code=403, detail="not allowed to access this recruitment")
     application_rows = list_recruitment_applications(recruit_id)

@@ -32,7 +32,10 @@ export function registerByPassword(payload) {
     data: {
       username: payload.username,
       password: payload.password,
-      nickname: payload.nickname || ''
+      nickname: payload.nickname || '',
+      phone: '',
+      smsCode: '',
+      email: ''
     }
   }, () => ({
     id: String(currentUser.id),

@@ -75,8 +75,13 @@ export default {
   },
   methods: {
     completeLogin(result) {
+      const token = result && typeof result.token === 'string' ? result.token : ''
+      const userInfo = result && result.userInfo && typeof result.userInfo === 'object' ? result.userInfo : null
+      if (!token || !userInfo) {
+        throw new Error('登录响应格式不正确')
+      }
       const userStore = useUserStore()
-      userStore.login(result.token, result.userInfo)
+      userStore.login(token, userInfo)
       uni.switchTab({
         url: '/pages/home/index'
       })

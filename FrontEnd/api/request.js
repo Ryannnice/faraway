@@ -27,7 +27,19 @@ function buildHeaders(header = {}) {
   }
 }
 
+function normalizeResponseBody(body) {
+  if (typeof body !== 'string') {
+    return body
+  }
+  try {
+    return JSON.parse(body)
+  } catch (error) {
+    return body
+  }
+}
+
 function unwrapResponseBody(body) {
+  body = normalizeResponseBody(body)
   if (!body || typeof body !== 'object' || !Object.prototype.hasOwnProperty.call(body, 'code')) {
     return body
   }
@@ -102,6 +114,7 @@ export function apiRequest(options) {
       method,
       data,
       header: buildHeaders(header),
+      dataType: 'json',
       timeout,
       success: (response) => {
         const statusCode = response.statusCode || 0

@@ -213,6 +213,73 @@ export function rejectRecruitmentApplication(recruitId, applicationId) {
   })
 }
 
+export function createRealtimeMatch(payload) {
+  return backendFirst({
+    url: '/api/match/realtime',
+    method: 'POST',
+    data: payload
+  }, () => ({
+    request_id: 'mock-realtime-request',
+    status: 'pending',
+    match_deadline_at: ''
+  }))
+}
+
+export function getCurrentRealtimeMatch() {
+  return backendFirst({
+    url: '/api/match/realtime/current',
+    method: 'GET'
+  }, () => ({
+    active: false
+  }))
+}
+
+export function acceptRealtimeCandidate(candidateId) {
+  return backendFirst({
+    url: `/api/match/realtime/candidate/${candidateId}/accept`,
+    method: 'POST'
+  }, () => ({
+    status: 'matched_waiting_decision',
+    candidate: {
+      candidate_id: candidateId,
+      my_decision: 'accepted',
+      peer_decision: 'pending'
+    }
+  }))
+}
+
+export function rejectRealtimeCandidate(candidateId) {
+  return backendFirst({
+    url: `/api/match/realtime/candidate/${candidateId}/reject`,
+    method: 'POST'
+  }, () => ({
+    status: 'pending'
+  }))
+}
+
+export function sendRealtimeRemark(pairId, remark) {
+  return backendFirst({
+    url: `/api/match/realtime/pair/${pairId}/remark`,
+    method: 'POST',
+    data: {
+      remark
+    }
+  }, () => ({
+    pair_id: pairId,
+    my_remark: remark,
+    peer_remark: ''
+  }))
+}
+
+export function cancelRealtimeMatch(requestId) {
+  return backendFirst({
+    url: `/api/match/realtime/${requestId}/cancel`,
+    method: 'POST'
+  }, () => ({
+    status: 'cancelled'
+  }))
+}
+
 export function getMyMatchApplications() {
   return backendFirst({
     url: '/api/my/match-applications',
