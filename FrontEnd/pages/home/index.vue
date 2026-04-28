@@ -29,7 +29,20 @@
       <scroll-view scroll-x class="preview-scroll" show-scrollbar="false">
         <view class="preview-row">
           <view v-for="item in previewItems" :key="item.id" class="preview-card" @tap="openPreview(item)">
-            <image class="preview-image" :src="item.coverUrl" mode="aspectFill" />
+            <video
+              v-if="item.contentType === 'vlog' && hasVideo(item)"
+              class="preview-image"
+              :src="getVideoUrl(item)"
+              :poster="getPosterUrl(item)"
+              object-fit="cover"
+              autoplay
+              muted
+              loop
+              :controls="false"
+              :show-center-play-btn="false"
+              :enable-progress-gesture="false"
+            />
+            <image v-else class="preview-image" :src="item.coverUrl" mode="aspectFill" />
             <view class="preview-mask" />
             <view class="preview-text">
               <text class="preview-type">{{ item.contentType === 'strategy' ? '攻略' : 'Vlog' }}</text>
@@ -45,6 +58,7 @@
 
 <script>
 import { getHomeFeed } from '../../api/modules/home'
+import { getPostPosterUrl, getPostVideoUrl, hasPostVideo } from '../../utils/post-media'
 import { go } from '../../utils/navigation'
 import FloatingPublishButton from '../../components/common/FloatingPublishButton.vue'
 
@@ -62,6 +76,15 @@ export default {
     this.fetchFeed()
   },
   methods: {
+    hasVideo(item) {
+      return hasPostVideo(item)
+    },
+    getVideoUrl(item) {
+      return getPostVideoUrl(item)
+    },
+    getPosterUrl(item) {
+      return getPostPosterUrl(item)
+    },
     async fetchFeed() {
       const result = await getHomeFeed()
       this.previewItems = result.list

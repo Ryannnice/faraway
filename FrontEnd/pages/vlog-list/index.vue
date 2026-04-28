@@ -7,7 +7,20 @@
     <swiper class="vlog-swiper" vertical circular>
       <swiper-item v-for="item in list" :key="item.id">
         <view class="vlog-item">
-          <image class="vlog-cover" :src="item.coverUrl" mode="aspectFill" />
+          <video
+            v-if="hasVideo(item)"
+            class="vlog-cover"
+            :src="getVideoUrl(item)"
+            :poster="getPosterUrl(item)"
+            object-fit="cover"
+            autoplay
+            muted
+            loop
+            :controls="false"
+            :show-center-play-btn="false"
+            :enable-progress-gesture="false"
+          />
+          <image v-else class="vlog-cover" :src="item.coverUrl" mode="aspectFill" />
           <view class="vlog-mask" />
           <view class="top-fade" />
 
@@ -59,6 +72,7 @@
 <script>
 import { getPostList } from '../../api/modules/post'
 import { sharePost, togglePostFavorite, togglePostLike } from '../../api/modules/post'
+import { getPostPosterUrl, getPostVideoUrl, hasPostVideo } from '../../utils/post-media'
 import { go } from '../../utils/navigation'
 import FloatingPublishButton from '../../components/common/FloatingPublishButton.vue'
 
@@ -75,6 +89,15 @@ export default {
     this.fetchList()
   },
   methods: {
+    hasVideo(item) {
+      return hasPostVideo(item)
+    },
+    getVideoUrl(item) {
+      return getPostVideoUrl(item)
+    },
+    getPosterUrl(item) {
+      return getPostPosterUrl(item)
+    },
     async fetchList() {
       const result = await getPostList()
       this.list = result.list

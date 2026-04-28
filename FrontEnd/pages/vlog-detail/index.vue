@@ -4,7 +4,17 @@
     <swiper class="vlog-swiper" vertical circular :current="currentIndex" @change="handleSwipe">
       <swiper-item v-for="item in list" :key="item.id">
         <view class="vlog-item">
-          <image class="vlog-cover" :src="item.coverUrl" mode="aspectFill" />
+          <video
+            v-if="hasVideo(item)"
+            class="vlog-cover"
+            :src="getVideoUrl(item)"
+            :poster="getPosterUrl(item)"
+            object-fit="cover"
+            autoplay
+            loop
+            controls
+          />
+          <image v-else class="vlog-cover" :src="item.coverUrl" mode="aspectFill" />
           <view class="vlog-mask" />
           <view class="vlog-meta" @tap="openAuthor(item.author.id)">
             <image class="author-avatar" :src="item.author.avatar" mode="aspectFill" />
@@ -60,6 +70,7 @@
 
 <script>
 import { createPostComment, getPostComments, getPostList, sharePost, togglePostFavorite, togglePostLike } from '../../api/modules/post'
+import { getPostPosterUrl, getPostVideoUrl, hasPostVideo } from '../../utils/post-media'
 import { go, safeBack } from '../../utils/navigation'
 
 export default {
@@ -85,6 +96,15 @@ export default {
   },
   methods: {
     safeBack,
+    hasVideo(item) {
+      return hasPostVideo(item)
+    },
+    getVideoUrl(item) {
+      return getPostVideoUrl(item)
+    },
+    getPosterUrl(item) {
+      return getPostPosterUrl(item)
+    },
     openAuthor(userId) {
       go(`/pages/user-profile/index?userId=${userId}`)
     },

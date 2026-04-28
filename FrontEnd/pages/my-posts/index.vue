@@ -3,7 +3,20 @@
     <AppHeader title="我的发布" subtitle="My Posts" fallback="/pages/profile/index" />
     <view class="list-column">
       <view v-for="item in items" :key="item.id" class="content-card row-card" @tap="openItem(item)">
-        <image class="row-image" :src="item.coverUrl" mode="aspectFill" />
+        <video
+          v-if="hasVideo(item)"
+          class="row-image"
+          :src="getVideoUrl(item)"
+          :poster="getPosterUrl(item)"
+          object-fit="cover"
+          autoplay
+          muted
+          loop
+          :controls="false"
+          :show-center-play-btn="false"
+          :enable-progress-gesture="false"
+        />
+        <image v-else class="row-image" :src="item.coverUrl" mode="aspectFill" />
         <view class="row-body">
           <text class="row-type">{{ item.type === 'vlog' ? 'Vlog' : '攻略' }}</text>
           <text class="row-title">{{ item.title }}</text>
@@ -17,6 +30,7 @@
 import AppHeader from '../../components/common/AppHeader.vue'
 import { getUserPublishedContent } from '../../api/modules/user'
 import { useUserStore } from '../../stores/user'
+import { getPostPosterUrl, getPostVideoUrl, hasPostVideo } from '../../utils/post-media'
 import { go } from '../../utils/navigation'
 
 export default {
@@ -32,6 +46,15 @@ export default {
     this.loadData()
   },
   methods: {
+    hasVideo(item) {
+      return hasPostVideo(item)
+    },
+    getVideoUrl(item) {
+      return getPostVideoUrl(item)
+    },
+    getPosterUrl(item) {
+      return getPostPosterUrl(item)
+    },
     async loadData() {
       const userStore = useUserStore()
       const userId = userStore.userInfo && userStore.userInfo.id

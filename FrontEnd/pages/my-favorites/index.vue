@@ -3,7 +3,20 @@
     <AppHeader title="我的收藏" subtitle="Favorites" fallback="/pages/profile/index" />
     <view class="two-column-grid">
       <view v-for="item in items" :key="`${item.contentType}-${item.id}`" class="content-card simple-card" @tap="openItem(item)">
-        <image class="simple-image" :src="item.coverUrl" mode="aspectFill" />
+        <video
+          v-if="(item.contentType === 'vlog' || item.type === 'vlog') && hasVideo(item)"
+          class="simple-image"
+          :src="getVideoUrl(item)"
+          :poster="getPosterUrl(item)"
+          object-fit="cover"
+          autoplay
+          muted
+          loop
+          :controls="false"
+          :show-center-play-btn="false"
+          :enable-progress-gesture="false"
+        />
+        <image v-else class="simple-image" :src="item.coverUrl" mode="aspectFill" />
         <view class="simple-body">
           <text class="simple-type">{{ item.contentType === 'vlog' ? 'Vlog' : '攻略' }}</text>
           <text class="simple-title">{{ item.title }}</text>
@@ -16,6 +29,7 @@
 <script>
 import AppHeader from '../../components/common/AppHeader.vue'
 import { getMyFavoriteContents } from '../../api/modules/user'
+import { getPostPosterUrl, getPostVideoUrl, hasPostVideo } from '../../utils/post-media'
 import { go } from '../../utils/navigation'
 
 export default {
@@ -31,6 +45,15 @@ export default {
     this.loadData()
   },
   methods: {
+    hasVideo(item) {
+      return hasPostVideo(item)
+    },
+    getVideoUrl(item) {
+      return getPostVideoUrl(item)
+    },
+    getPosterUrl(item) {
+      return getPostPosterUrl(item)
+    },
     async loadData() {
       const result = await getMyFavoriteContents()
       this.items = result.list

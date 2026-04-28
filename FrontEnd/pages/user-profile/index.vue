@@ -8,7 +8,20 @@
     </view>
     <view class="two-column-grid">
       <view v-for="item in profile.posts" :key="item.id" class="content-card profile-card" @tap="openContent(item)">
-        <image class="profile-card-image" :src="item.coverUrl" mode="aspectFill" />
+        <video
+          v-if="item.type === 'vlog' && hasVideo(item)"
+          class="profile-card-image"
+          :src="getVideoUrl(item)"
+          :poster="getPosterUrl(item)"
+          object-fit="cover"
+          autoplay
+          muted
+          loop
+          :controls="false"
+          :show-center-play-btn="false"
+          :enable-progress-gesture="false"
+        />
+        <image v-else class="profile-card-image" :src="item.coverUrl" mode="aspectFill" />
         <view class="profile-card-body">
           <text class="profile-card-title">{{ item.title }}</text>
         </view>
@@ -20,6 +33,7 @@
 <script>
 import AppHeader from '../../components/common/AppHeader.vue'
 import { getUserPublicProfile } from '../../api/modules/user'
+import { getPostPosterUrl, getPostVideoUrl, hasPostVideo } from '../../utils/post-media'
 import { go } from '../../utils/navigation'
 
 export default {
@@ -35,6 +49,15 @@ export default {
     this.profile = await getUserPublicProfile(options && options.userId)
   },
   methods: {
+    hasVideo(item) {
+      return hasPostVideo(item)
+    },
+    getVideoUrl(item) {
+      return getPostVideoUrl(item)
+    },
+    getPosterUrl(item) {
+      return getPostPosterUrl(item)
+    },
     openContent(item) {
       if (item.type === 'vlog') {
         go(`/pages/vlog-detail/index?id=${item.id}`)

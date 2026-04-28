@@ -12,6 +12,38 @@
     </view>
 
     <view class="panel-shell">
+      <view v-if="hasRealtimeRecord" class="realtime-card" @tap="openRealtimePage">
+        <view class="card-top">
+          <view class="card-copy">
+            <text class="card-kicker">实时找搭子</text>
+            <text class="card-title">{{ buildRealtimeTitle() }}</text>
+            <text class="card-subline">{{ buildRealtimeSubtitle() }}</text>
+          </view>
+          <view class="status-badge" :class="realtimeBadgeClass">
+            <text>{{ realtimeStatusText }}</text>
+          </view>
+        </view>
+
+        <view class="info-grid">
+          <view class="info-block">
+            <text class="info-label">日期范围</text>
+            <text class="info-value">{{ formatTravelRange(realtimeState) }}</text>
+          </view>
+          <view class="info-block">
+            <text class="info-label">状态说明</text>
+            <text class="info-value">{{ buildRealtimeHint() }}</text>
+          </view>
+          <view class="info-block">
+            <text class="info-label">搭子对象</text>
+            <text class="info-value">{{ buildRealtimePeer() }}</text>
+          </view>
+          <view class="info-block">
+            <text class="info-label">入口</text>
+            <text class="info-value">点击查看详情</text>
+          </view>
+        </view>
+      </view>
+
       <view class="tab-row">
         <view class="partner-tab" :class="{ active: activeTab === 'recruitments' }" @tap="switchTab('recruitments')">
           <text class="tab-icon">◎</text>
@@ -79,8 +111,8 @@
 
         <view v-else class="empty-shell">
           <view class="empty-icon">◎</view>
-          <text class="empty-title">你还没有发布招募帖</text>
-          <text class="empty-desc">先去招募搭子，公开你的目的地、时间和偏好。</text>
+          <text class="empty-title">{{ hasRealtimeRecord ? '当前实时找搭子记录展示在上方' : '你还没有发布招募帖' }}</text>
+          <text class="empty-desc">{{ hasRealtimeRecord ? '实时匹配不会进入旧招募帖列表，但你可以点上方卡片继续查看。' : '先去招募搭子，公开你的目的地、时间和偏好。' }}</text>
         </view>
       </view>
 
@@ -138,7 +170,7 @@
 </template>
 
 <script>
-import { approveRecruitmentApplication, getMyMatchApplications, getMyRecruitments, rejectRecruitmentApplication } from '../../api/modules/match'
+import { approveRecruitmentApplication, getCurrentRealtimeMatch, getMyMatchApplications, getMyRecruitments, rejectRecruitmentApplication } from '../../api/modules/match'
 import { MATCH_APPLICATION_STATUS, MATCH_RECRUITMENT_STATUS } from '../../constants/enums'
 import { go, safeBack } from '../../utils/navigation'
 
@@ -147,7 +179,8 @@ export default {
     return {
       activeTab: 'recruitments',
       recruitments: [],
-      applications: []
+      applications: [],
+      realtimeState: null
     }
   },
   computed: {
@@ -156,6 +189,31 @@ export default {
     },
     safeApplications() {
       return Array.isArray(this.applications) ? this.applications : []
+    },
+    hasRealtimeRecord() {
+      return !!(this.realtimeState && this.realtimeState.request_id)
+    },
+    realtimeStatusText() {
+      const status = this.realtimeState && this.realtimeState.status
+      const labelMap = {
+        pending: '匹配中',
+        matched_waiting_decision: '待决定',
+        matched_accepted: '已确认',
+        failed: '未匹配到',
+        cancelled: '已取消',
+        finished: '已结束'
+      }
+      return labelMap[status] || '实时找搭子'
+    },
+    realtimeBadgeClass() {
+      const status = this.realtimeState && this.realtimeState.status
+      if (status === 'matched_accepted') {
+        return 'approved'
+      }
+      if (status === 'failed' || status === 'cancelled') {
+        return 'rejected'
+      }
+      return 'pending'
     }
   },
   onLoad(options) {
@@ -169,12 +227,14 @@ export default {
   },
   methods: {
     async loadData() {
-      const [recruitmentResult, applicationResult] = await Promise.all([
+      const [recruitmentResult, applicationResult, realtimeResult] = await Promise.all([
         getMyRecruitments(),
-        getMyMatchApplications()
+        getMyMatchApplications(),
+        getCurrentRealtimeMatch()
       ])
       this.recruitments = Array.isArray(recruitmentResult && recruitmentResult.list) ? recruitmentResult.list : []
       this.applications = Array.isArray(applicationResult && applicationResult.list) ? applicationResult.list : []
+      this.realtimeState = realtimeResult && realtimeResult.request_id ? realtimeResult : null
     },
     switchTab(tab) {
       this.activeTab = tab
@@ -184,6 +244,9 @@ export default {
     },
     openUser(userId) {
       go(`/pages/user-profile/index?userId=${userId}`)
+    },
+    openRealtimePage() {
+      go('/pages/match/index')
     },
     getApplications(item) {
       return Array.isArray(item && item.applications) ? item.applications : []
@@ -200,6 +263,55 @@ export default {
     buildApplicationTitle(item) {
       return item && item.destination ? `关于 ${item.destination} 的联系记录` : '我的联系记录'
     },
+    buildRealtimeTitle() {
+      const destination = this.realtimeState && this.realtimeState.destination
+      return destination ? `去${destination}的实时找搭子` : '当前实时找搭子'
+    },
+    buildRealtimeSubtitle() {
+      if (!this.realtimeState) {
+        return '点击查看详情'
+      }
+      if (this.realtimeState.status === 'matched_accepted' && this.realtimeState.pair) {
+        return `已与 ${this.realtimeState.pair.peer_nickname || '搭子'} 确认见面`
+      }
+      if (this.realtimeState.status === 'matched_waiting_decision' && this.realtimeState.candidate) {
+        return `当前候选：${this.realtimeState.candidate.peer_nickname || '待确认'}`
+      }
+      return '点击查看当前实时匹配状态'
+    },
+    buildRealtimeHint() {
+      if (!this.realtimeState) {
+        return '待查看'
+      }
+      if (this.realtimeState.status === 'matched_accepted' && this.realtimeState.pair) {
+        return this.formatDateTime(this.realtimeState.pair.meet_time)
+      }
+      if (this.realtimeState.status === 'matched_waiting_decision' && this.realtimeState.candidate) {
+        return `截止 ${this.formatDateTime(this.realtimeState.candidate.decision_expires_at)}`
+      }
+      if (this.realtimeState.match_deadline_at) {
+        return `截止 ${this.formatDateTime(this.realtimeState.match_deadline_at)}`
+      }
+      return this.realtimeStatusText
+    },
+    buildRealtimePeer() {
+      if (!this.realtimeState) {
+        return '待匹配'
+      }
+      if (this.realtimeState.pair && this.realtimeState.pair.peer_nickname) {
+        return this.realtimeState.pair.peer_nickname
+      }
+      if (this.realtimeState.candidate && this.realtimeState.candidate.peer_nickname) {
+        return this.realtimeState.candidate.peer_nickname
+      }
+      return '待匹配'
+    },
+    formatTravelRange(item) {
+      if (!item) {
+        return '待确定'
+      }
+      return `${this.formatDate(item.travel_start_date)} - ${this.formatDate(item.travel_end_date)}`
+    },
     formatDate(value) {
       if (!value) {
         return '待确定'
@@ -209,6 +321,13 @@ export default {
         return `${Number(parts[0])}年${Number(parts[1])}月${Number(parts[2])}日`
       }
       return value
+    },
+    formatDateTime(value) {
+      if (!value) {
+        return '待确定'
+      }
+      const [datePart, timePart = ''] = String(value).split('T')
+      return `${this.formatDate(datePart)} ${timePart.slice(0, 5)}`
     },
     async approve(recruitId, apply) {
       if (apply.status !== 'pending') {
@@ -286,6 +405,14 @@ export default {
 
 .panel-shell {
   padding: 34rpx 32rpx 120rpx;
+}
+
+.realtime-card {
+  margin-bottom: 22rpx;
+  padding: 28rpx;
+  border-radius: 30rpx;
+  background: linear-gradient(135deg, rgba(38, 57, 88, 0.96) 0%, rgba(16, 24, 38, 0.98) 100%);
+  border: 1rpx solid rgba(255, 255, 255, 0.08);
 }
 
 .tab-row {

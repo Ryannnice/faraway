@@ -13,7 +13,20 @@
 
     <view class="two-column-grid">
       <view v-for="item in mixedList" :key="`${item.contentType}-${item.id}`" class="content-card search-card" @tap="openItem(item)">
-        <image class="search-image" :src="item.coverUrl" mode="aspectFill" />
+        <video
+          v-if="item.contentType === 'vlog' && hasVideo(item)"
+          class="search-image"
+          :src="getVideoUrl(item)"
+          :poster="getPosterUrl(item)"
+          object-fit="cover"
+          autoplay
+          muted
+          loop
+          :controls="false"
+          :show-center-play-btn="false"
+          :enable-progress-gesture="false"
+        />
+        <image v-else class="search-image" :src="item.coverUrl" mode="aspectFill" />
         <view class="search-body">
           <text class="search-type">{{ item.contentType === 'strategy' ? '攻略' : 'Vlog' }}</text>
           <text class="search-title">{{ item.title }}</text>
@@ -30,6 +43,7 @@ import AppHeader from '../../components/common/AppHeader.vue'
 import EmptyState from '../../components/common/EmptyState.vue'
 import { SEARCH_TYPES } from '../../constants/enums'
 import { searchAll } from '../../api/modules/search'
+import { getPostPosterUrl, getPostVideoUrl, hasPostVideo } from '../../utils/post-media'
 import { saveSearchKeyword } from '../../utils/storage'
 import { go } from '../../utils/navigation'
 
@@ -74,6 +88,15 @@ export default {
     this.fetchData()
   },
   methods: {
+    hasVideo(item) {
+      return hasPostVideo(item)
+    },
+    getVideoUrl(item) {
+      return getPostVideoUrl(item)
+    },
+    getPosterUrl(item) {
+      return getPostPosterUrl(item)
+    },
     async fetchData() {
       saveSearchKeyword(this.keyword)
       this.result = await searchAll({

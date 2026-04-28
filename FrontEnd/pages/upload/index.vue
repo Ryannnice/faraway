@@ -548,6 +548,9 @@ export default {
   display: flex;
   gap: 22rpx;
   margin-top: 34rpx;
+  position: sticky;
+  bottom: 24rpx;
+  z-index: 3;
 }
 
 .draft-btn,
