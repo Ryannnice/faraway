@@ -72,7 +72,7 @@ def _normalize_strategy(raw: Any, req: GenerateStrategyRequest) -> GeneratedStra
 
 def generate_strategy(req: GenerateStrategyRequest) -> dict:
     if not settings.dashscope_api_key:
-        return _normalize_strategy(_local_strategy(req), req).model_dump()
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="dashscope api key missing")
 
     prompt = {
         "destination": req.destination,

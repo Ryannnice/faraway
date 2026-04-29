@@ -15,6 +15,7 @@ from app.db.base import Base
 from app.db.session import engine
 from app.modules.ai.router import router as ai_router
 from app.modules.auth.router import router as auth_router
+from app.modules.content.router import router as content_router
 from app.modules.matches.router import router as matches_router
 from app.modules.media.router import router as media_router
 from app.modules.notifications.router import router as notifications_router
@@ -39,6 +40,7 @@ api_router = APIRouter(prefix=settings.api_prefix)
 api_router.include_router(auth_router)
 api_router.include_router(users_router)
 api_router.include_router(ai_router)
+api_router.include_router(content_router)
 api_router.include_router(matches_router)
 api_router.include_router(media_router)
 api_router.include_router(notifications_router)

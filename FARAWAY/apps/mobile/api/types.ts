@@ -29,6 +29,59 @@ export interface StrategyResult {
   tips: string[];
 }
 
+export interface ContentAuthor {
+  user_id: string;
+  nickname: string;
+  avatar: string;
+}
+
+export interface ContentSummary {
+  content_id: string;
+  content_type: "strategy" | "vlog";
+  title: string;
+  summary: string;
+  cover_url: string;
+  tags: string[];
+  author: ContentAuthor;
+  published_at: string;
+}
+
+export interface ContentFeedResponse {
+  list: ContentSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+export interface ContentDetail extends ContentSummary {
+  destination?: string;
+  days?: number;
+  overview?: string;
+  daily_plans?: StrategyResult["daily_plans"];
+  tips?: string[];
+  content?: string;
+  image_urls?: string[];
+}
+
+export interface StrategyPublishPayload {
+  title: string;
+  tags: string[];
+  cover_asset_id: string | null;
+  destination: string;
+  days: number;
+  overview: string;
+  daily_plans: StrategyResult["daily_plans"];
+  tips: string[];
+}
+
+export interface VlogPublishPayload {
+  title: string;
+  content: string;
+  tags: string[];
+  image_asset_ids: string[];
+}
+
 export interface MatchCandidateView {
   candidate_id: string;
   peer_user_id: string;

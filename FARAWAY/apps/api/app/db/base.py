@@ -8,6 +8,7 @@ class Base(DeclarativeBase):
 
 
 def import_models() -> None:
+    from app.modules.content import model as _content_model  # noqa: F401
     from app.modules.auth import model as _auth_model  # noqa: F401
     from app.modules.matches import model as _match_model  # noqa: F401
     from app.modules.media import model as _media_model  # noqa: F401

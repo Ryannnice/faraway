@@ -19,6 +19,12 @@
       }
     },
     {
+      "path": "pages/content-detail/index",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/match/index",
       "style": {
         "navigationStyle": "custom"
@@ -39,6 +45,18 @@
     },
     {
       "path": "pages/profile/index",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/my-contents/index",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/publish-text/index",
       "style": {
         "navigationStyle": "custom"
       }

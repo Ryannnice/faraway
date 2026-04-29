@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { onLoad } from "@dcloudio/uni-app";
 
+import { resolveAssetUrl } from "@/api/request";
 import AppNavBar from "@/components/AppNavBar.vue";
 import { getUserProfile } from "@/api/user";
 import { ensureLoggedIn, useAuthGuard } from "@/composables/useAuthGuard";
@@ -35,7 +36,7 @@ onLoad(async (options) => {
     <AppNavBar title="TA 的主页" subtitle="User" />
 
     <view v-if="profile" class="glass-card panel">
-      <image v-if="profile.avatar" class="avatar-image" :src="profile.avatar" mode="aspectFill" />
+      <image v-if="profile.avatar" class="avatar-image" :src="resolveAssetUrl(profile.avatar)" mode="aspectFill" />
       <view v-else class="avatar-fallback">{{ profile.nickname.slice(0, 1) }}</view>
       <text class="panel-title">{{ profile.nickname }}</text>
       <text class="panel-copy">性别：{{ profile.gender }}</text>

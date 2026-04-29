@@ -5,6 +5,16 @@ import type { ApiEnvelope } from "./types";
 
 const API_BASE_URL = "http://127.0.0.1:8000";
 
+export function resolveAssetUrl(url: string): string {
+  if (!url) {
+    return "";
+  }
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+  return `${API_BASE_URL}${url.startsWith("/") ? url : `/${url}`}`;
+}
+
 function handleAuthExpired(): void {
   clearToken();
   clearUserInfoStorage();
@@ -14,7 +24,7 @@ function handleAuthExpired(): void {
 export function request<T>(options: {
   url: string;
   method?: "GET" | "POST" | "PUT";
-  data?: Record<string, unknown>;
+  data?: unknown;
   auth?: boolean;
 }): Promise<T> {
   const token = getToken();

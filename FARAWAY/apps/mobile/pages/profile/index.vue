@@ -4,7 +4,7 @@ import { onShow } from "@dcloudio/uni-app";
 
 import AppNavBar from "@/components/AppNavBar.vue";
 import { ROUTES } from "@/constants/routes";
-import { uploadImage } from "@/api/request";
+import { resolveAssetUrl, uploadImage } from "@/api/request";
 import { ensureLoggedIn, useAuthGuard } from "@/composables/useAuthGuard";
 import { useProfileStore } from "@/stores/profile";
 import { go } from "@/utils/navigation";
@@ -83,7 +83,7 @@ function onGenderChange(event) {
       <view class="glass-card panel">
         <text class="section-kicker">Avatar</text>
         <view class="avatar-row">
-          <image v-if="form.avatar" class="avatar-image" :src="form.avatar" mode="aspectFill" />
+          <image v-if="form.avatar" class="avatar-image" :src="resolveAssetUrl(form.avatar)" mode="aspectFill" />
           <view v-else class="avatar-fallback">{{ form.nickname.slice(0, 1) || "F" }}</view>
           <button class="secondary-button avatar-button" @tap="chooseAvatar">上传头像</button>
         </view>
