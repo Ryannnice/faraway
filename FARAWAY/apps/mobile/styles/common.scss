@@ -1,0 +1,137 @@
+@import "./variables.scss";
+
+page,
+.page-shell {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(236, 214, 179, 0.18), transparent 32%),
+    radial-gradient(circle at top right, rgba(111, 168, 220, 0.16), transparent 28%),
+    linear-gradient(180deg, #0a1524 0%, $faraway-bg 40%, $faraway-bg-deep 100%);
+  color: $faraway-text;
+}
+
+.page-shell {
+  min-height: 100vh;
+  padding: 28rpx $page-padding 120rpx;
+  box-sizing: border-box;
+}
+
+.glass-card {
+  background: $faraway-panel;
+  border: 1rpx solid $faraway-border;
+  box-shadow: 0 24rpx 80rpx rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(26rpx);
+}
+
+.section-kicker {
+  font-size: 20rpx;
+  letter-spacing: 8rpx;
+  text-transform: uppercase;
+  color: rgba(246, 240, 232, 0.42);
+}
+
+.section-title {
+  font-size: 52rpx;
+  line-height: 1.08;
+  font-weight: 700;
+  color: $faraway-text;
+}
+
+.muted-text {
+  color: $faraway-muted;
+}
+
+.pill-button,
+.primary-button,
+.secondary-button,
+.danger-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999rpx;
+  border: none;
+}
+
+.pill-button {
+  padding: 0 34rpx;
+  height: 88rpx;
+  background: rgba(255, 255, 255, 0.1);
+  color: $faraway-text;
+  border: 1rpx solid rgba(255, 255, 255, 0.08);
+}
+
+.primary-button {
+  height: 92rpx;
+  background: $faraway-accent;
+  color: #0c1320;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+
+.secondary-button {
+  height: 92rpx;
+  background: rgba(255, 255, 255, 0.08);
+  color: $faraway-text;
+  border: 1rpx solid rgba(255, 255, 255, 0.12);
+}
+
+.danger-button {
+  height: 92rpx;
+  background: rgba(255, 143, 123, 0.16);
+  color: $faraway-danger;
+  border: 1rpx solid rgba(255, 143, 123, 0.2);
+}
+
+.button-disabled {
+  opacity: 0.55;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 10rpx 18rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.08);
+  color: $faraway-text;
+  font-size: 22rpx;
+}
+
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24rpx;
+}
+
+.label-text {
+  display: block;
+  margin-bottom: 14rpx;
+  color: $faraway-muted;
+  font-size: 24rpx;
+}
+
+.field-input,
+.field-textarea,
+.field-picker {
+  width: 100%;
+  border-radius: 24rpx;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1rpx solid rgba(255, 255, 255, 0.06);
+  color: $faraway-text;
+  box-sizing: border-box;
+}
+
+.field-input,
+.field-picker {
+  height: 92rpx;
+  padding: 0 28rpx;
+  line-height: 92rpx;
+}
+
+.field-textarea {
+  min-height: 220rpx;
+  padding: 24rpx 28rpx;
+}
+
+button::after {
+  border: none;
+}

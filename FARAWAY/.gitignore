@@ -1,0 +1,5 @@
+.venv/
+apps/mobile/node_modules/
+apps/api/.pytest_cache/
+**/__pycache__/
+*.pyc

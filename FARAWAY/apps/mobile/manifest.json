@@ -1,0 +1,17 @@
+{
+  "name": "Faraway",
+  "appid": "__UNI__FARAWAY_P0",
+  "description": "Faraway P0 mobile client",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "app-plus": {
+    "usingComponents": true
+  },
+  "h5": {
+    "title": "Faraway"
+  },
+  "mp-weixin": {
+    "appid": ""
+  }
+}
