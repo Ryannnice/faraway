@@ -91,4 +91,4 @@ async def test_generate_strategy_success_and_failure_with_mocked_dashscope(clien
         },
     )
     assert failure_response.status_code == 502
-    assert failure_response.json()["message"] == "strategy generation failed"
+    assert failure_response.json()["message"].startswith("dashscope response invalid:")

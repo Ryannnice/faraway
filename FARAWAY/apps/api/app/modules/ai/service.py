@@ -38,6 +38,29 @@ def _extract_json_payload(content: str) -> Any:
     return json.loads(text)
 
 
+def _extract_message_content(message_content: Any) -> str:
+    if isinstance(message_content, str):
+        return message_content
+
+    if isinstance(message_content, list):
+        parts: list[str] = []
+        for item in message_content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if text:
+                    parts.append(str(text))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+
+    if isinstance(message_content, dict):
+        text = message_content.get("text")
+        if text:
+            return str(text)
+
+    raise ValueError("dashscope content format invalid")
+
+
 def _normalize_strategy(raw: Any, req: GenerateStrategyRequest) -> GeneratedStrategy:
     if not isinstance(raw, dict):
         raise ValueError("strategy payload is not an object")
@@ -70,10 +93,7 @@ def _normalize_strategy(raw: Any, req: GenerateStrategyRequest) -> GeneratedStra
     )
 
 
-def generate_strategy(req: GenerateStrategyRequest) -> dict:
-    if not settings.dashscope_api_key:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="dashscope api key missing")
-
+def _build_strategy_messages(req: GenerateStrategyRequest) -> list[dict[str, str]]:
     prompt = {
         "destination": req.destination,
         "days": req.days,
@@ -83,30 +103,67 @@ def generate_strategy(req: GenerateStrategyRequest) -> dict:
         "pace": req.pace,
         "group_type": req.group_type,
     }
+    return [
+        {
+            "role": "system",
+            "content": (
+                "你是旅行规划助手。"
+                "你必须只返回一个严格 JSON 对象，不要返回 Markdown，不要返回解释文字。"
+                "JSON 必须包含 destination、overview、daily_plans、tips 四个字段。"
+                "daily_plans 必须是数组，长度必须等于用户要求的 days。"
+                "daily_plans 每项必须包含 day、activities、food、accommodation。"
+                "activities 和 food 必须是字符串数组。"
+            ),
+        },
+        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+    ]
+
+
+def _request_dashscope_strategy(req: GenerateStrategyRequest) -> GeneratedStrategy:
+    response = httpx.post(
+        f"{settings.dashscope_base_url.rstrip('/')}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {settings.dashscope_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": settings.dashscope_model,
+            "messages": _build_strategy_messages(req),
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+        },
+        timeout=settings.strategy_ai_timeout_seconds,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    message_content = payload["choices"][0]["message"]["content"]
+    content = _extract_message_content(message_content)
+    raw = _extract_json_payload(content)
+    return _normalize_strategy(raw, req)
+
+
+def generate_strategy(req: GenerateStrategyRequest) -> dict:
+    if not settings.dashscope_api_key:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="dashscope api key missing")
+
     try:
-        response = httpx.post(
-            f"{settings.dashscope_base_url.rstrip('/')}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.dashscope_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.dashscope_model,
-                "messages": [
-                    {"role": "system", "content": "你是旅行规划助手，只返回严格 JSON。"},
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                ],
-                "response_format": {"type": "json_object"},
-            },
-            timeout=settings.strategy_ai_timeout_seconds,
-        )
-        response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        raw = _extract_json_payload(content)
-        return _normalize_strategy(raw, req).model_dump()
+        return _request_dashscope_strategy(req).model_dump()
+    except httpx.TimeoutException as exc:
+        logger.exception("strategy generation timed out destination=%s", req.destination)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="dashscope request timed out") from exc
+    except httpx.HTTPStatusError as exc:
+        logger.exception("strategy generation http error destination=%s", req.destination)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"dashscope request failed: {exc.response.status_code}",
+        ) from exc
     except (httpx.HTTPError, KeyError, ValueError, json.JSONDecodeError) as exc:
         logger.exception("strategy generation failed destination=%s", req.destination)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="strategy generation failed") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"dashscope response invalid: {exc}",
+        ) from exc
 
 
 def generate_meeting_place(destination: str, preference_tags: list[str], preference_text: str) -> str:
