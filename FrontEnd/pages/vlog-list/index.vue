@@ -1,105 +1,77 @@
 <template>
   <view class="vlog-page">
-    <swiper class="vlog-swiper" vertical circular :current="currentIndex" @change="handleSwipe">
-      <swiper-item v-for="(item, index) in list" :key="item.id">
-        <view class="vlog-item">
-          <video
-            v-if="hasVideo(item)"
-            :id="videoDomId(item.id)"
-            class="vlog-cover"
-            :src="getVideoUrl(item)"
-            :poster="getPosterUrl(item)"
-            object-fit="cover"
-            :autoplay="index === currentIndex"
-            muted
-            loop
-            :controls="false"
-            :show-center-play-btn="false"
-            :enable-progress-gesture="false"
-            :show-play-btn="false"
-          />
-          <image v-else-if="getFeedCover(item)" class="vlog-cover" :src="getFeedCover(item)" mode="aspectFill" />
-          <view v-else class="vlog-fallback">
-            <text class="fallback-kicker">VLOG</text>
-            <text class="fallback-title">{{ item.title || '点击进入详情' }}</text>
-          </view>
+    <view class="video-stage">
+      <video
+        v-if="currentItem && hasVideo(currentItem)"
+        :id="videoDomId(currentItem.id)"
+        :key="videoKey"
+        class="main-video"
+        :src="getVideoUrl(currentItem)"
+        :poster="disablePoster ? '' : getPosterUrl(currentItem)"
+        object-fit="contain"
+        autoplay
+        loop
+        :muted="false"
+        :controls="false"
+        :show-center-play-btn="false"
+        :show-play-btn="false"
+        :enable-progress-gesture="true"
+      />
 
-          <cover-view class="top-layer">
-            <cover-view class="search-float" @tap="openSearch">
-              <cover-view class="search-icon">⌕</cover-view>
-              <cover-view class="search-label">搜索标签、城市...</cover-view>
-            </cover-view>
-
-            <cover-view class="vlog-mask" />
-            <cover-view class="top-fade" />
-
-            <cover-view class="right-rail">
-              <cover-view class="author-rail" @tap="openAuthor(item.author.id)">
-                <cover-image class="rail-avatar" :src="item.author.avatar || defaultAvatar" />
-                <cover-view class="follow-pill">主页</cover-view>
-              </cover-view>
-
-              <cover-view class="rail-action" @tap="toggleLike(item)">
-                <cover-view class="rail-icon-circle">
-                  <cover-view class="rail-icon">{{ item.isLiked ? '♥' : '♡' }}</cover-view>
-                </cover-view>
-                <cover-view class="rail-count">{{ item.likeCount }}</cover-view>
-                <cover-view class="rail-label">点赞</cover-view>
-              </cover-view>
-
-              <cover-view class="rail-action" @tap="toggleFavorite(item)">
-                <cover-view class="rail-icon-circle">
-                  <cover-view class="rail-icon">{{ item.isFavorited ? '★' : '☆' }}</cover-view>
-                </cover-view>
-                <cover-view class="rail-count">{{ item.favoriteCount }}</cover-view>
-                <cover-view class="rail-label">收藏</cover-view>
-              </cover-view>
-
-              <cover-view class="rail-action" @tap="openDetail(item.id)">
-                <cover-view class="rail-icon-circle">
-                  <cover-view class="rail-icon">✎</cover-view>
-                </cover-view>
-                <cover-view class="rail-count">{{ item.commentCount }}</cover-view>
-                <cover-view class="rail-label">评论</cover-view>
-              </cover-view>
-
-              <cover-view class="rail-action" @tap="shareItem(item)">
-                <cover-view class="rail-icon-circle">
-                  <cover-view class="rail-icon">⇪</cover-view>
-                </cover-view>
-                <cover-view class="rail-count">{{ item.shareCount }}</cover-view>
-                <cover-view class="rail-label">分享</cover-view>
-              </cover-view>
-
-              <cover-view class="rail-action rail-action-next" @tap="goNext">
-                <cover-view class="rail-icon-circle rail-icon-circle-next">
-                  <cover-view class="rail-icon">↓</cover-view>
-                </cover-view>
-                <cover-view class="rail-label">下一条</cover-view>
-              </cover-view>
-            </cover-view>
-
-            <cover-view class="vlog-body">
-              <cover-view v-if="item.location" class="location-chip">
-                <cover-view class="chip-icon">◎</cover-view>
-                <cover-view class="chip-text">{{ item.location }}</cover-view>
-              </cover-view>
-
-              <cover-view class="author-row" @tap="openAuthor(item.author.id)">
-                <cover-image class="body-avatar" :src="item.author.avatar || defaultAvatar" />
-                <cover-view class="author-handle">@{{ item.author.nickname || 'Faraway' }}</cover-view>
-              </cover-view>
-
-              <cover-view class="vlog-title">{{ item.title || '未命名 Vlog' }}</cover-view>
-              <cover-view class="vlog-desc">{{ item.content || '这个瞬间值得被记录。' }}</cover-view>
-              <cover-view class="detail-pill" @tap="openDetail(item.id)">查看详情</cover-view>
-            </cover-view>
-          </cover-view>
+      <view v-else class="video-fallback">
+        <image
+          v-if="currentItem && getFeedCover(currentItem)"
+          class="fallback-image"
+          :src="getFeedCover(currentItem)"
+          mode="aspectFit"
+        />
+        <view v-else class="fallback-empty">
+          <text class="fallback-title">{{ currentItem ? (currentItem.title || '暂无视频') : '暂无内容' }}</text>
         </view>
-      </swiper-item>
-    </swiper>
+      </view>
 
-    <FloatingPublishButton />
+      <view class="top-tools">
+        <view class="search-btn" @tap="openSearch">搜索标签、城市...</view>
+      </view>
+
+      <view v-if="currentItem" class="side-actions">
+        <view class="action-item" @tap="toggleLike(currentItem)">
+          <text class="action-icon">{{ currentItem.isLiked ? '♥' : '♡' }}</text>
+          <text class="action-text">{{ formatCount(currentItem.likeCount) }}</text>
+        </view>
+        <view class="action-item" @tap="toggleFavorite(currentItem)">
+          <text class="action-icon">{{ currentItem.isFavorited ? '★' : '☆' }}</text>
+          <text class="action-text">{{ formatCount(currentItem.favoriteCount) }}</text>
+        </view>
+        <view class="action-item" @tap="openDetail(currentItem.id)">
+          <text class="action-icon">✎</text>
+          <text class="action-text">{{ formatCount(currentItem.commentCount) }}</text>
+        </view>
+        <view class="action-item" @tap="shareItem(currentItem)">
+          <text class="action-icon">⇪</text>
+          <text class="action-text">{{ formatCount(currentItem.shareCount) }}</text>
+        </view>
+      </view>
+    </view>
+
+    <view v-if="currentItem" class="bottom-panel">
+      <view class="author-row" @tap="openAuthor(currentItem.author.id)">
+        <image class="author-avatar" :src="currentItem.author.avatar || defaultAvatar" mode="aspectFill" />
+        <text class="author-name">@{{ currentItem.author.nickname || 'Faraway' }}</text>
+      </view>
+
+      <text class="video-title">{{ currentItem.title || '未命名 Vlog' }}</text>
+      <text class="video-desc">{{ currentItem.content || '这个瞬间值得被记录。' }}</text>
+      <text v-if="currentItem.location" class="video-meta">{{ currentItem.location }}</text>
+
+      <view class="button-row">
+        <view class="control-btn primary-btn" @tap="togglePlayback">
+          {{ isPlaying ? '暂停' : '播放' }}
+        </view>
+        <view class="control-btn" @tap="playNext">下一条</view>
+        <view class="control-btn" @tap="openDetail(currentItem.id)">详情</view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -107,7 +79,6 @@
 import { getPostList, sharePost, togglePostFavorite, togglePostLike } from '../../api/modules/post'
 import { getPostPosterUrl, getPostVideoUrl, hasPostVideo, isVideoLikeUrl } from '../../utils/post-media'
 import { go } from '../../utils/navigation'
-import FloatingPublishButton from '../../components/common/FloatingPublishButton.vue'
 
 function shuffleItems(list = []) {
   const next = [...list]
@@ -121,14 +92,19 @@ function shuffleItems(list = []) {
 }
 
 export default {
-  components: {
-    FloatingPublishButton
-  },
   data() {
     return {
       list: [],
       currentIndex: 0,
-      defaultAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=400'
+      defaultAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=400',
+      isPlaying: true,
+      videoKey: 0,
+      disablePoster: true
+    }
+  },
+  computed: {
+    currentItem() {
+      return this.list[this.currentIndex] || null
     }
   },
   async onLoad() {
@@ -138,8 +114,24 @@ export default {
     videoDomId(id) {
       return `vlog-video-${id}`
     },
+    formatCount(value) {
+      const count = Number(value || 0)
+      if (count >= 10000) {
+        return `${(count / 10000).toFixed(count >= 100000 ? 0 : 1).replace(/\.0$/, '')}w`
+      }
+      if (count >= 1000) {
+        return `${(count / 1000).toFixed(count >= 10000 ? 0 : 1).replace(/\.0$/, '')}k`
+      }
+      return String(count)
+    },
     hasVideo(item) {
       return hasPostVideo(item)
+    },
+    getVideoUrl(item) {
+      return getPostVideoUrl(item)
+    },
+    getPosterUrl(item) {
+      return getPostPosterUrl(item)
     },
     getFeedCover(item) {
       const posterUrl = this.getPosterUrl(item)
@@ -151,18 +143,67 @@ export default {
       }
       return ''
     },
-    getVideoUrl(item) {
-      return getPostVideoUrl(item)
-    },
-    getPosterUrl(item) {
-      return getPostPosterUrl(item)
-    },
     async fetchList() {
       const result = await getPostList()
       this.list = shuffleItems(result.list || [])
       this.currentIndex = 0
+      this.videoKey += 1
+      this.isPlaying = true
       this.$nextTick(() => {
-        this.syncPlayback()
+        this.playCurrentVideo()
+      })
+    },
+    getCurrentVideoContext() {
+      if (!this.currentItem || !this.hasVideo(this.currentItem)) {
+        return null
+      }
+      try {
+        return uni.createVideoContext(this.videoDomId(this.currentItem.id), this)
+      } catch (error) {
+        console.warn('create video context failed', error)
+        return null
+      }
+    },
+    playCurrentVideo() {
+      const ctx = this.getCurrentVideoContext()
+      if (!ctx) {
+        return
+      }
+      try {
+        ctx.play()
+        this.isPlaying = true
+      } catch (error) {
+        console.warn('play video failed', error)
+      }
+    },
+    pauseCurrentVideo() {
+      const ctx = this.getCurrentVideoContext()
+      if (!ctx) {
+        return
+      }
+      try {
+        ctx.pause()
+        this.isPlaying = false
+      } catch (error) {
+        console.warn('pause video failed', error)
+      }
+    },
+    togglePlayback() {
+      if (this.isPlaying) {
+        this.pauseCurrentVideo()
+        return
+      }
+      this.playCurrentVideo()
+    },
+    playNext() {
+      if (!this.list.length) {
+        return
+      }
+      this.currentIndex = (this.currentIndex + 1) % this.list.length
+      this.videoKey += 1
+      this.isPlaying = true
+      this.$nextTick(() => {
+        this.playCurrentVideo()
       })
     },
     openAuthor(userId) {
@@ -170,69 +211,6 @@ export default {
     },
     openSearch() {
       go('/pages/search-result/index?keyword=&type=vlog')
-    },
-    async handleSwipe(event) {
-      const previousIndex = this.currentIndex
-      this.pauseVideoByIndex(previousIndex)
-      this.currentIndex = event.detail.current
-      if (this.list.length > 1 && previousIndex === this.list.length - 1 && this.currentIndex === 0) {
-        await this.fetchList()
-        return
-      }
-      this.$nextTick(() => {
-        this.syncPlayback()
-      })
-    },
-    pauseVideoByIndex(index) {
-      const item = this.list[index]
-      if (!item || !this.hasVideo(item)) {
-        return
-      }
-      const ctx = uni.createVideoContext(this.videoDomId(item.id), this)
-      ctx.pause()
-    },
-    playVideoByIndex(index) {
-      const item = this.list[index]
-      if (!item || !this.hasVideo(item)) {
-        return
-      }
-      const ctx = uni.createVideoContext(this.videoDomId(item.id), this)
-      ctx.play()
-    },
-    syncPlayback() {
-      this.list.forEach((item, index) => {
-        if (!this.hasVideo(item)) {
-          return
-        }
-        if (index === this.currentIndex) {
-          this.playVideoByIndex(index)
-          return
-        }
-        this.pauseVideoByIndex(index)
-      })
-    },
-    async goNext() {
-      if (!this.list.length) {
-        return
-      }
-      if (this.list.length === 1) {
-        uni.showToast({
-          title: '暂时没有下一条了',
-          icon: 'none'
-        })
-        return
-      }
-      const nextIndex = (this.currentIndex + 1) % this.list.length
-      const reordered = [
-        ...this.list.slice(nextIndex),
-        ...this.list.slice(0, nextIndex)
-      ]
-      this.pauseVideoByIndex(this.currentIndex)
-      this.list = reordered
-      this.currentIndex = 0
-      this.$nextTick(() => {
-        this.syncPlayback()
-      })
     },
     async toggleLike(item) {
       const result = await togglePostLike(item.id)
@@ -263,263 +241,167 @@ export default {
 .vlog-page {
   position: fixed;
   inset: 0;
-  height: 100vh;
-  overflow: hidden;
-  background: #0a0d12;
+  background: #000;
+  display: flex;
+  flex-direction: column;
 }
 
-.vlog-swiper {
-  height: 100vh;
-}
-
-.vlog-item {
+.video-stage {
   position: relative;
-  height: 100%;
-  overflow: hidden;
-  background: #0a0d12;
+  flex: 1;
+  background: #000;
 }
 
-.vlog-cover,
-.vlog-fallback {
-  position: absolute;
-  inset: 0;
+.main-video,
+.video-fallback,
+.fallback-image,
+.fallback-empty {
   width: 100%;
   height: 100%;
 }
 
-.vlog-fallback {
-  padding: 34rpx;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  background:
-    radial-gradient(circle at top left, rgba(236, 214, 179, 0.22), transparent 38%),
-    linear-gradient(160deg, #163047 0%, #0d1825 52%, #09111a 100%);
+.main-video,
+.video-fallback {
+  display: block;
+  background: #000;
 }
 
-.top-layer {
-  position: absolute;
-  inset: 0;
-}
-
-.search-float {
-  position: absolute;
-  top: 92rpx;
-  left: 48rpx;
-  right: 48rpx;
-  z-index: 6;
-  height: 92rpx;
-  border-radius: 999rpx;
-  padding: 0 30rpx;
-  display: flex;
-  align-items: center;
-  background: rgba(39, 44, 51, 0.58);
-  border: 2rpx solid rgba(255, 255, 255, 0.08);
-}
-
-.search-icon {
-  font-size: 34rpx;
-  color: rgba(255, 255, 255, 0.62);
-}
-
-.search-label {
-  margin-left: 18rpx;
-  color: rgba(255, 255, 255, 0.44);
-  font-size: 26rpx;
-}
-
-.vlog-mask {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.12) 0%, rgba(0, 0, 0, 0.18) 18%, rgba(0, 0, 0, 0.18) 42%, rgba(0, 0, 0, 0.62) 88%, rgba(0, 0, 0, 0.86) 100%);
-}
-
-.top-fade {
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 320rpx;
-  z-index: 3;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.28) 0%, rgba(0, 0, 0, 0) 100%);
-}
-
-.right-rail {
-  position: absolute;
-  right: 24rpx;
-  bottom: 310rpx;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 28rpx;
-}
-
-.author-rail {
-  width: 96rpx;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.rail-avatar,
-.body-avatar {
-  border-radius: 50%;
-}
-
-.rail-avatar {
-  width: 88rpx;
-  height: 88rpx;
-}
-
-.follow-pill {
-  margin-top: -8rpx;
-  min-width: 56rpx;
-  padding: 10rpx 14rpx;
-  border-radius: 999rpx;
-  background: rgba(255, 255, 255, 0.92);
-  color: #101010;
-  font-size: 22rpx;
-  font-weight: 700;
-  text-align: center;
-}
-
-.rail-action {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.rail-action-next {
-  margin-top: 8rpx;
-}
-
-.rail-icon-circle {
-  width: 92rpx;
-  height: 92rpx;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.18);
+.fallback-empty {
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.rail-icon-circle-next {
-  background: rgba(255, 255, 255, 0.26);
-}
-
-.rail-icon {
-  font-size: 44rpx;
-  color: #ffffff;
-}
-
-.rail-count,
-.rail-label {
-  color: rgba(255, 255, 255, 0.96);
-  text-align: center;
-}
-
-.rail-count {
-  margin-top: 12rpx;
-  font-size: 24rpx;
-  font-weight: 700;
-}
-
-.rail-label {
-  margin-top: 4rpx;
-  font-size: 22rpx;
-}
-
-.vlog-body {
-  position: absolute;
-  left: 34rpx;
-  right: 152rpx;
-  bottom: 180rpx;
-  z-index: 5;
-}
-
-.location-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 10rpx;
-  min-height: 68rpx;
-  padding: 0 24rpx;
-  border-radius: 999rpx;
-  background: rgba(255, 255, 255, 0.18);
-}
-
-.chip-icon,
-.chip-text,
-.author-handle,
-.vlog-title,
-.vlog-desc,
-.fallback-kicker,
 .fallback-title {
-  display: block;
+  color: #fff;
+  font-size: 34rpx;
 }
 
-.chip-icon {
-  font-size: 24rpx;
-  color: rgba(255, 255, 255, 0.82);
+.top-tools {
+  position: absolute;
+  top: 76rpx;
+  left: 24rpx;
+  right: 24rpx;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-start;
 }
 
-.chip-text {
-  font-size: 22rpx;
+.search-btn {
+  min-width: 360rpx;
+  max-width: 520rpx;
+  height: 76rpx;
+  padding: 0 28rpx;
+  border-radius: 999rpx;
+  background: rgba(0, 0, 0, 0.42);
   color: rgba(255, 255, 255, 0.9);
+  font-size: 26rpx;
+  display: flex;
+  align-items: center;
+}
+
+.side-actions {
+  position: absolute;
+  right: 18rpx;
+  bottom: 60rpx;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+.action-item {
+  width: 92rpx;
+  min-height: 92rpx;
+  padding: 10rpx 0;
+  border-radius: 22rpx;
+  background: rgba(0, 0, 0, 0.36);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.action-icon {
+  color: #fff;
+  font-size: 40rpx;
+  line-height: 1;
+}
+
+.action-text {
+  margin-top: 8rpx;
+  color: #fff;
+  font-size: 20rpx;
+}
+
+.bottom-panel {
+  padding: 24rpx 24rpx calc(24rpx + env(safe-area-inset-bottom));
+  background: #0b0b0b;
 }
 
 .author-row {
-  margin-top: 26rpx;
   display: flex;
   align-items: center;
 }
 
-.body-avatar {
+.author-avatar {
   width: 56rpx;
   height: 56rpx;
+  border-radius: 50%;
 }
 
-.author-handle {
+.author-name {
   margin-left: 14rpx;
+  color: #fff;
   font-size: 28rpx;
   font-weight: 700;
-  color: #ffffff;
 }
 
-.vlog-title,
-.fallback-title {
-  margin-top: 18rpx;
-  font-size: 56rpx;
-  line-height: 1.1;
+.video-title {
+  display: block;
+  margin-top: 16rpx;
+  color: #fff;
+  font-size: 42rpx;
   font-weight: 700;
-  color: #ffffff;
+  line-height: 1.2;
 }
 
-.fallback-kicker {
-  font-size: 20rpx;
-  letter-spacing: 4rpx;
-  color: rgba(255, 255, 255, 0.56);
+.video-desc {
+  display: block;
+  margin-top: 12rpx;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 26rpx;
+  line-height: 1.5;
 }
 
-.vlog-desc {
-  margin-top: 18rpx;
-  font-size: 28rpx;
-  line-height: 1.7;
-  color: rgba(255, 255, 255, 0.84);
+.video-meta {
+  display: block;
+  margin-top: 10rpx;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 22rpx;
 }
 
-.detail-pill {
-  margin-top: 26rpx;
-  display: inline-flex;
+.button-row {
+  margin-top: 20rpx;
+  display: flex;
+  gap: 16rpx;
+}
+
+.control-btn {
+  flex: 1;
+  height: 76rpx;
+  border-radius: 999rpx;
+  background: #232323;
+  color: #fff;
+  font-size: 26rpx;
+  display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 180rpx;
-  height: 72rpx;
-  padding: 0 26rpx;
-  border-radius: 999rpx;
-  background: rgba(255, 255, 255, 0.16);
-  color: #ffffff;
-  font-size: 24rpx;
+}
+
+.primary-btn {
+  background: #ffffff;
+  color: #111111;
   font-weight: 700;
 }
 </style>
