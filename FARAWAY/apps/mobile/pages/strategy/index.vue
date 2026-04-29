@@ -1,9 +1,8 @@
-<script setup lang="ts">
+<script setup>
 import { reactive, ref } from "vue";
 
 import AppNavBar from "@/components/AppNavBar.vue";
 import { generateStrategy } from "@/api/ai";
-import type { StrategyResult } from "@/api/types";
 import { useAuthGuard } from "@/composables/useAuthGuard";
 
 useAuthGuard();
@@ -18,7 +17,7 @@ const form = reactive({
   group_type: "",
 });
 
-const result = ref<StrategyResult | null>(null);
+const result = ref(null);
 const generating = ref(false);
 
 async function handleGenerate() {

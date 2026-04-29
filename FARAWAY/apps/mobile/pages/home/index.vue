@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script setup>
 import { computed } from "vue";
 
 import { ROUTES } from "@/constants/routes";
@@ -9,7 +9,10 @@ import { go } from "@/utils/navigation";
 useAuthGuard();
 
 const authStore = useAuthStore();
-const nickname = computed(() => authStore.userInfo?.nickname || "旅人");
+const nickname = computed(() => {
+  const userInfo = authStore.userInfo;
+  return userInfo && userInfo.nickname ? userInfo.nickname : "旅人";
+});
 const heroImage =
   "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&q=80&w=2000";
 </script>

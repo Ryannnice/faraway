@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script setup>
 import { reactive } from "vue";
 import { onShow } from "@dcloudio/uni-app";
 
@@ -12,11 +12,12 @@ import { go } from "@/utils/navigation";
 useAuthGuard();
 
 const profileStore = useProfileStore();
+const genderOptions = ["unknown", "male", "female"];
 const form = reactive({
   nickname: "",
   bio: "",
   avatar: "",
-  gender: "unknown" as "unknown" | "male" | "female",
+  gender: "unknown",
 });
 
 onShow(async () => {
@@ -29,10 +30,10 @@ onShow(async () => {
 
 async function chooseAvatar() {
   try {
-    const filePath = await new Promise<string>((resolve, reject) => {
+    const filePath = await new Promise((resolve, reject) => {
       uni.chooseImage({
         count: 1,
-        success: (result: any) => resolve(result.tempFilePaths[0]),
+        success: (result) => resolve(result.tempFilePaths[0]),
         fail: reject,
       });
     });
@@ -56,6 +57,11 @@ async function saveProfile() {
       icon: "none",
     });
   }
+}
+
+function onGenderChange(event) {
+  const nextGender = genderOptions[event.detail.value] || "unknown";
+  form.gender = nextGender;
 }
 </script>
 
@@ -84,10 +90,7 @@ async function saveProfile() {
         </view>
         <view class="field-block">
           <text class="label-text">性别</text>
-          <picker
-            :range="['unknown', 'male', 'female']"
-            @change="form.gender = (['unknown', 'male', 'female'][$event.detail.value] as 'unknown' | 'male' | 'female')"
-          >
+          <picker :range="genderOptions" @change="onGenderChange">
             <view class="field-picker">{{ form.gender }}</view>
           </picker>
         </view>

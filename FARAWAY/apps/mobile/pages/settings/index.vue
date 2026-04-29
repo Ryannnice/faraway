@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script setup>
 import AppNavBar from "@/components/AppNavBar.vue";
 import { ROUTES } from "@/constants/routes";
 import { useAuthGuard } from "@/composables/useAuthGuard";

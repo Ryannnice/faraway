@@ -1,31 +1,34 @@
-<script setup lang="ts">
+<script setup>
 import { computed } from "vue";
 
 import { safeBack, goHome } from "@/utils/navigation";
 
-const props = withDefaults(
-  defineProps<{
-    title: string;
-    subtitle?: string;
-    backable?: boolean;
-  }>(),
-  {
-    subtitle: "",
-    backable: true,
+const props = defineProps({
+  title: {
+    type: String,
+    required: true,
   },
-);
+  subtitle: {
+    type: String,
+    default: "",
+  },
+  backable: {
+    type: Boolean,
+    default: true,
+  },
+});
 
 const hasSubtitle = computed(() => Boolean(props.subtitle));
 </script>
 
 <template>
   <view class="nav-bar">
-    <view class="nav-action left" @tap="backable ? safeBack() : undefined">
-      <text v-if="backable" class="nav-button">返回</text>
+    <view class="nav-action left" @tap="props.backable ? safeBack() : undefined">
+      <text v-if="props.backable" class="nav-button">返回</text>
     </view>
     <view class="nav-center">
-      <text class="nav-title">{{ title }}</text>
-      <text v-if="hasSubtitle" class="nav-subtitle">{{ subtitle }}</text>
+      <text class="nav-title">{{ props.title }}</text>
+      <text v-if="hasSubtitle" class="nav-subtitle">{{ props.subtitle }}</text>
     </view>
     <view class="nav-action right" @tap="goHome">
       <text class="nav-button">首页</text>

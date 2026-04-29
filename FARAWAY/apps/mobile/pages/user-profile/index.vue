@@ -1,18 +1,17 @@
-<script setup lang="ts">
+<script setup>
 import { ref } from "vue";
 import { onLoad } from "@dcloudio/uni-app";
 
 import AppNavBar from "@/components/AppNavBar.vue";
 import { getUserProfile } from "@/api/user";
-import type { UserProfile } from "@/api/types";
 import { useAuthGuard } from "@/composables/useAuthGuard";
 
 useAuthGuard();
 
-const profile = ref<UserProfile | null>(null);
+const profile = ref(null);
 
 onLoad(async (options) => {
-  const userId = options?.user_id;
+  const userId = options && options.user_id ? options.user_id : "";
   if (!userId) {
     uni.showToast({ title: "缺少用户 ID", icon: "none" });
     return;

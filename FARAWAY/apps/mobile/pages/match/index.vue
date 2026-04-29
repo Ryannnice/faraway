@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script setup>
 import { computed, onBeforeUnmount, reactive, ref } from "vue";
 import { onHide, onShow } from "@dcloudio/uni-app";
 
@@ -18,9 +18,9 @@ const current = computed(() => matchStore.current);
 const loading = ref(false);
 const editing = ref(false);
 const remarkText = ref("");
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer = null;
 
-function addDays(days: number): string {
+function addDays(days) {
   const date = new Date();
   date.setDate(date.getDate() + days);
   const year = date.getFullYear();
@@ -33,12 +33,17 @@ const form = reactive({
   destination: "",
   travel_start_date: addDays(5),
   travel_end_date: addDays(7),
-  preference_tags: [] as string[],
+  preference_tags: [],
   preference_text: "",
 });
 
 const terminalStatuses = new Set(["failed", "cancelled", "finished"]);
-const currentStatus = computed(() => current.value?.status || null);
+const currentStatus = computed(() => {
+  if (!current.value) {
+    return null;
+  }
+  return current.value.status || null;
+});
 
 const viewMode = computed(() => {
   if (!currentStatus.value) {
@@ -76,7 +81,7 @@ function syncFormFromCurrent() {
 async function refreshCurrent() {
   try {
     await matchStore.fetchCurrent();
-    if (current.value?.status === "matched_waiting_decision" && current.value.candidate) {
+    if (current.value && current.value.status === "matched_waiting_decision" && current.value.candidate) {
       const candidateId = current.value.candidate.candidate_id;
       if (!readSeenCandidateIds().includes(candidateId)) {
         markCandidateSeen(candidateId);
@@ -122,12 +127,35 @@ onBeforeUnmount(() => {
   stopPolling();
 });
 
-function toggleTag(tag: string) {
+function toggleTag(tag) {
   if (form.preference_tags.includes(tag)) {
     form.preference_tags = form.preference_tags.filter((item) => item !== tag);
     return;
   }
   form.preference_tags = [...form.preference_tags, tag];
+}
+
+const currentCandidate = computed(() => (current.value ? current.value.candidate : null));
+const currentPair = computed(() => (current.value ? current.value.pair : null));
+const currentDestination = computed(() => (current.value && current.value.destination ? current.value.destination : ""));
+const currentTravelStart = computed(() => (current.value ? current.value.travel_start_date : ""));
+const currentTravelEnd = computed(() => (current.value ? current.value.travel_end_date : ""));
+const currentDeadline = computed(() => (current.value ? current.value.match_deadline_at : ""));
+const currentPreferenceTags = computed(() => (current.value && current.value.preference_tags ? current.value.preference_tags : []));
+const currentPreferenceText = computed(() => (current.value && current.value.preference_text ? current.value.preference_text : ""));
+const waitingForPeer = computed(() => currentCandidate.value && currentCandidate.value.my_decision === "accepted");
+const endedTitle = computed(() => {
+  if (!currentStatus.value) {
+    return "已结束";
+  }
+  return MATCH_STATUS_LABELS[currentStatus.value] || currentStatus.value;
+});
+
+function openCandidateProfile() {
+  if (!currentCandidate.value || !currentCandidate.value.peer_user_id) {
+    return;
+  }
+  go(`${ROUTES.userProfile}?user_id=${currentCandidate.value.peer_user_id}`);
 }
 
 function beginEdit() {
@@ -164,14 +192,15 @@ async function submitRequest() {
 }
 
 async function cancelRequest() {
-  if (!current.value?.request_id) {
+  if (!current.value || !current.value.request_id) {
     return;
   }
   await matchStore.cancel(current.value.request_id);
 }
 
 async function acceptCandidate() {
-  const candidateId = current.value?.candidate?.candidate_id;
+  const candidateId =
+    current.value && current.value.candidate ? current.value.candidate.candidate_id : "";
   if (!candidateId) {
     return;
   }
@@ -179,7 +208,8 @@ async function acceptCandidate() {
 }
 
 async function rejectCandidate() {
-  const candidateId = current.value?.candidate?.candidate_id;
+  const candidateId =
+    current.value && current.value.candidate ? current.value.candidate.candidate_id : "";
   if (!candidateId) {
     return;
   }
@@ -187,7 +217,7 @@ async function rejectCandidate() {
 }
 
 async function submitRemark() {
-  const pairId = current.value?.pair?.pair_id;
+  const pairId = current.value && current.value.pair ? current.value.pair.pair_id : "";
   if (!pairId || !remarkText.value.trim()) {
     return;
   }
@@ -247,13 +277,13 @@ async function submitRemark() {
     <view v-else-if="viewMode === 'pending'" class="card-stack">
       <view class="glass-card panel">
         <text class="panel-title">{{ MATCH_STATUS_LABELS.pending }}</text>
-        <text class="panel-copy">目的地：{{ current?.destination }}</text>
-        <text class="panel-copy">日期：{{ formatDate(current?.travel_start_date) }} - {{ formatDate(current?.travel_end_date) }}</text>
-        <text class="panel-copy">截止：{{ formatDateTime(current?.match_deadline_at) }}</text>
+        <text class="panel-copy">目的地：{{ currentDestination }}</text>
+        <text class="panel-copy">日期：{{ formatDate(currentTravelStart) }} - {{ formatDate(currentTravelEnd) }}</text>
+        <text class="panel-copy">截止：{{ formatDateTime(currentDeadline) }}</text>
         <view class="tag-row">
-          <text v-for="tag in current?.preference_tags || []" :key="tag" class="tag-chip">{{ tag }}</text>
+          <text v-for="tag in currentPreferenceTags" :key="tag" class="tag-chip">{{ tag }}</text>
         </view>
-        <text v-if="current?.preference_text" class="panel-copy">{{ current.preference_text }}</text>
+        <text v-if="currentPreferenceText" class="panel-copy">{{ currentPreferenceText }}</text>
       </view>
       <button class="secondary-button action-button" @tap="beginEdit">重新填写条件</button>
       <button class="danger-button action-button" @tap="cancelRequest">取消匹配</button>
@@ -261,14 +291,14 @@ async function submitRemark() {
 
     <view v-else-if="viewMode === 'waiting'" class="card-stack">
       <view class="glass-card panel">
-        <text class="panel-title">候选搭子：{{ current?.candidate?.peer_nickname }}</text>
-        <text class="panel-copy">截止：{{ formatDateTime(current?.candidate?.decision_expires_at) }}</text>
-        <text class="panel-copy">匹配理由：{{ current?.candidate?.match_summary }}</text>
-        <text class="panel-copy">建议见面地：{{ current?.candidate?.meeting_place_text }}</text>
-        <text class="panel-copy" v-if="current?.candidate?.my_decision === 'accepted'">你已经同意，正在等待对方回应。</text>
+        <text class="panel-title">候选搭子：{{ currentCandidate && currentCandidate.peer_nickname }}</text>
+        <text class="panel-copy">截止：{{ formatDateTime(currentCandidate && currentCandidate.decision_expires_at) }}</text>
+        <text class="panel-copy">匹配理由：{{ currentCandidate && currentCandidate.match_summary }}</text>
+        <text class="panel-copy">建议见面地：{{ currentCandidate && currentCandidate.meeting_place_text }}</text>
+        <text class="panel-copy" v-if="waitingForPeer">你已经同意，正在等待对方回应。</text>
       </view>
-      <button class="secondary-button action-button" @tap="go(`${ROUTES.userProfile}?user_id=${current?.candidate?.peer_user_id}`)">查看 TA 的主页</button>
-      <view v-if="current?.candidate?.my_decision !== 'accepted'" class="action-row">
+      <button class="secondary-button action-button" @tap="openCandidateProfile">查看 TA 的主页</button>
+      <view v-if="!waitingForPeer" class="action-row">
         <button class="secondary-button row-button" @tap="rejectCandidate">拒绝，继续寻找</button>
         <button class="primary-button row-button" @tap="acceptCandidate">我愿意</button>
       </view>
@@ -276,13 +306,13 @@ async function submitRemark() {
 
     <view v-else-if="viewMode === 'accepted'" class="card-stack">
       <view class="glass-card panel">
-        <text class="panel-title">已确认赴约：{{ current?.pair?.peer_nickname }}</text>
-        <text class="panel-copy">见面时间：{{ formatDateTime(current?.pair?.meet_time) }}</text>
-        <text class="panel-copy">见面地点：{{ current?.pair?.meet_location_text }}</text>
-        <text class="panel-copy">对方备注：{{ current?.pair?.peer_remark || "对方还没填写备注。" }}</text>
-        <text class="panel-copy" v-if="current?.pair?.my_remark">我的备注：{{ current.pair.my_remark }}</text>
+        <text class="panel-title">已确认赴约：{{ currentPair && currentPair.peer_nickname }}</text>
+        <text class="panel-copy">见面时间：{{ formatDateTime(currentPair && currentPair.meet_time) }}</text>
+        <text class="panel-copy">见面地点：{{ currentPair && currentPair.meet_location_text }}</text>
+        <text class="panel-copy">对方备注：{{ (currentPair && currentPair.peer_remark) || "对方还没填写备注。" }}</text>
+        <text class="panel-copy" v-if="currentPair && currentPair.my_remark">我的备注：{{ currentPair.my_remark }}</text>
       </view>
-      <view v-if="current?.pair && !current.pair.my_remark" class="glass-card panel">
+      <view v-if="currentPair && !currentPair.my_remark" class="glass-card panel">
         <text class="label-text">我的备注（只能发送一次）</text>
         <textarea v-model="remarkText" class="field-textarea" maxlength="200" />
         <button class="primary-button action-button" @tap="submitRemark">提交备注</button>
@@ -291,7 +321,7 @@ async function submitRemark() {
 
     <view v-else-if="viewMode === 'ended'" class="card-stack">
       <view class="glass-card panel">
-        <text class="panel-title">{{ currentStatus ? MATCH_STATUS_LABELS[currentStatus] : "已结束" }}</text>
+        <text class="panel-title">{{ endedTitle }}</text>
         <text class="panel-copy">上一轮请求已经结束，你可以重新开始下一轮。</text>
       </view>
       <button class="primary-button action-button" @tap="restartFlow">重新开始</button>

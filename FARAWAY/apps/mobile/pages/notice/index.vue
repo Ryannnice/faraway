@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script setup>
 import { onPullDownRefresh, onShow } from "@dcloudio/uni-app";
 
 import AppNavBar from "@/components/AppNavBar.vue";

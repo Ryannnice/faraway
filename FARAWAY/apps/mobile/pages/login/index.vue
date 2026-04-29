@@ -1,4 +1,4 @@
-<script setup lang="ts">
+<script setup>
 import { computed, ref } from "vue";
 import { onShow } from "@dcloudio/uni-app";
 
@@ -6,7 +6,7 @@ import { ROUTES } from "@/constants/routes";
 import { useAuthStore } from "@/stores/auth";
 
 const authStore = useAuthStore();
-const mode = ref<"login" | "register">("login");
+const mode = ref("login");
 const username = ref("");
 const password = ref("");
 const submitting = ref(false);

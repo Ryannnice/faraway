@@ -6,12 +6,15 @@
   "versionCode": "100",
   "transformPx": false,
   "app-plus": {
-    "usingComponents": true
+    "usingComponents": true,
+    "nvueStyleCompiler": "uni-app",
+    "compilerVersion": 3
   },
   "h5": {
     "title": "Faraway"
   },
   "mp-weixin": {
     "appid": ""
-  }
+  },
+  "vueVersion": "3"
 }
