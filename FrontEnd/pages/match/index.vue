@@ -346,7 +346,9 @@ export default {
       busy: false,
       showCandidatePopup: false,
       remarkText: '',
-      pollTimer: null
+      pollTimer: null,
+      lastCandidateNoticeId: '',
+      lastPairNoticeId: ''
     }
   },
   computed: {
@@ -496,12 +498,14 @@ export default {
     },
     async loadCurrentState(silentError = false) {
       try {
+        const previousState = this.state && typeof this.state === 'object' ? { ...this.state } : { active: false }
         const result = await getCurrentRealtimeMatch()
         this.state = result && typeof result === 'object' ? result : { active: false }
         if (this.currentPair && this.currentPair.my_remark) {
           this.remarkText = ''
         }
         this.maybeShowCandidatePopup()
+        this.maybeNotifyRealtimeState(previousState)
         this.syncPolling()
       } catch (error) {
         this.stopPolling()
@@ -541,6 +545,28 @@ export default {
       }
       const dismissedId = uni.getStorageSync(DISMISSED_CANDIDATE_KEY) || ''
       this.showCandidatePopup = dismissedId !== this.currentCandidate.candidate_id
+    },
+    maybeNotifyRealtimeState(previousState) {
+      const previousStatus = previousState && previousState.status ? previousState.status : ''
+      const currentStatus = this.state && this.state.status ? this.state.status : ''
+      if (currentStatus === 'matched_waiting_decision' && this.currentCandidate && this.currentCandidate.candidate_id !== this.lastCandidateNoticeId) {
+        this.lastCandidateNoticeId = this.currentCandidate.candidate_id
+        if (previousStatus !== 'matched_waiting_decision' || !previousState.candidate || previousState.candidate.candidate_id !== this.currentCandidate.candidate_id) {
+          uni.showToast({
+            title: '已为你找到新的搭子候选',
+            icon: 'none'
+          })
+        }
+      }
+      if (currentStatus === 'matched_accepted' && this.currentPair && this.currentPair.pair_id !== this.lastPairNoticeId) {
+        this.lastPairNoticeId = this.currentPair.pair_id
+        uni.showModal({
+          title: '匹配成功',
+          content: '双方已确认成功，快去查看对方信息并联系吧。',
+          showCancel: false,
+          confirmText: '我知道了'
+        })
+      }
     },
     rememberDismissedCandidate() {
       if (!this.currentCandidate) {

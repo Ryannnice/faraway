@@ -1307,7 +1307,23 @@ def get_user_public_profile(user_id: str) -> dict:
     profile = store.get("users", user_id)
     if not profile:
         raise HTTPException(status_code=404, detail="user not found")
-    return ok(user_model(profile))
+    strategies = [
+        item
+        for item in store.list("fe_strategies")
+        if item.get("author", {}).get("id") == user_id and is_published(item)
+    ]
+    posts = [
+        item
+        for item in store.list("fe_posts")
+        if item.get("author", {}).get("id") == user_id and is_published(item)
+    ]
+    published_items = [*strategies, *posts]
+    stats = {
+        "posts": len(published_items),
+        "favorites": sum(int(item.get("favoriteCount", 0) or 0) for item in published_items),
+        "likes": sum(int(item.get("likeCount", 0) or 0) for item in published_items),
+    }
+    return ok({**user_model(profile), "stats": stats})
 
 
 @router.get("/users/{user_id}/contents")

@@ -60,6 +60,11 @@ export function getUserPublicProfile(userId) {
     const posts = [...strategies.filter((item) => item.author.id === user.id), ...vlogs.filter((item) => item.author.id === user.id)]
     return {
       ...user,
+      stats: {
+        posts: posts.length,
+        favorites: posts.reduce((sum, item) => sum + Number(item.favoriteCount || 0), 0),
+        likes: posts.reduce((sum, item) => sum + Number(item.likeCount || 0), 0)
+      },
       posts
     }
   })

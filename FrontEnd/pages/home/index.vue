@@ -29,7 +29,11 @@
       <scroll-view scroll-x class="preview-scroll" show-scrollbar="false">
         <view class="preview-row">
           <view v-for="item in previewItems" :key="item.id" class="preview-card" @tap="openPreview(item)">
-            <image class="preview-image" :src="getPreviewImage(item)" mode="aspectFill" />
+            <image v-if="getPreviewImage(item)" class="preview-image" :src="getPreviewImage(item)" mode="aspectFill" />
+            <view v-else class="preview-fallback">
+              <text class="preview-fallback-kicker">{{ item.contentType === 'vlog' ? 'VLOG' : 'STRATEGY' }}</text>
+              <text class="preview-fallback-title">{{ item.title || '未命名内容' }}</text>
+            </view>
             <view class="preview-mask" />
             <view class="preview-text">
               <text class="preview-type">{{ item.contentType === 'strategy' ? '攻略' : 'Vlog' }}</text>
@@ -45,7 +49,7 @@
 
 <script>
 import { getHomeFeed } from '../../api/modules/home'
-import { getPostPosterUrl } from '../../utils/post-media'
+import { getPostPosterUrl, isVideoLikeUrl } from '../../utils/post-media'
 import { go } from '../../utils/navigation'
 import FloatingPublishButton from '../../components/common/FloatingPublishButton.vue'
 
@@ -68,7 +72,14 @@ export default {
         return ''
       }
       if (item.contentType === 'vlog') {
-        return getPostPosterUrl(item) || item.coverUrl || ''
+        const posterUrl = getPostPosterUrl(item)
+        if (posterUrl) {
+          return posterUrl
+        }
+        if (item.coverUrl && !isVideoLikeUrl(item.coverUrl)) {
+          return item.coverUrl
+        }
+        return ''
       }
       if (item.coverUrl) {
         return item.coverUrl
@@ -235,8 +246,39 @@ export default {
   height: 100%;
 }
 
+.preview-fallback {
+  position: absolute;
+  inset: 0;
+  padding: 24rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background:
+    radial-gradient(circle at top left, rgba(236, 214, 179, 0.28), transparent 42%),
+    linear-gradient(160deg, #163047 0%, #0d1825 52%, #09111a 100%);
+}
+
 .preview-mask {
   background: linear-gradient(180deg, rgba(7, 17, 31, 0.1) 15%, rgba(7, 17, 31, 0.78) 100%);
+}
+
+.preview-fallback-kicker,
+.preview-fallback-title {
+  display: block;
+  color: rgba(246, 240, 232, 0.92);
+}
+
+.preview-fallback-kicker {
+  font-size: 20rpx;
+  letter-spacing: 4rpx;
+  color: rgba(246, 240, 232, 0.6);
+}
+
+.preview-fallback-title {
+  margin-top: 12rpx;
+  font-size: 30rpx;
+  line-height: 1.35;
+  font-weight: 700;
 }
 
 .preview-text {

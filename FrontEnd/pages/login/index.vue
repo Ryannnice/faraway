@@ -1,5 +1,5 @@
 <template>
-  <view class="page-shell login-page">
+  <view v-if="!redirecting" class="page-shell login-page">
     <image class="bg-image" src="https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&q=80&w=2000" mode="aspectFill" />
     <view class="bg-mask" />
     <view class="login-content">
@@ -68,6 +68,7 @@ const USERNAME_PATTERN = /^[A-Za-z0-9_]+$/
 export default {
   data() {
     return {
+      redirecting: true,
       viewMode: 'entry',
       authMode: 'login',
       form: {
@@ -78,17 +79,27 @@ export default {
       }
     }
   },
+  onLoad() {
+    if (this.redirectIfLoggedIn()) {
+      return
+    }
+    this.redirecting = false
+  },
   onShow() {
-    this.redirectIfLoggedIn()
+    if (this.redirectIfLoggedIn()) {
+      return
+    }
+    this.redirecting = false
   },
   methods: {
     redirectIfLoggedIn() {
       if (!isLoggedIn()) {
-        return
+        return false
       }
       uni.switchTab({
         url: '/pages/home/index'
       })
+      return true
     },
     completeLogin(result) {
       const token = result && typeof result.token === 'string' ? result.token : ''

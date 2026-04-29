@@ -1,10 +1,10 @@
 <template>
   <view class="page-shell with-safe-bottom">
-    <image class="profile-cover" :src="user.avatar" mode="aspectFill" />
+    <image class="profile-cover" :src="user.avatar || defaultAvatar" mode="aspectFill" />
     <view class="profile-mask" />
     <view class="profile-content">
       <view class="profile-top">
-        <image class="profile-avatar" :src="user.avatar" mode="aspectFill" />
+        <image class="profile-avatar" :src="user.avatar || defaultAvatar" mode="aspectFill" />
         <view class="profile-meta">
           <text class="profile-name">{{ user.nickname }}</text>
           <text class="profile-bio">{{ user.bio }}</text>
@@ -31,7 +31,6 @@
         <view class="menu-card glass-card" @tap="goPage('/pages/drafts/index')">草稿箱</view>
         <view class="menu-card glass-card" @tap="goPage('/pages/my-favorites/index')">我的收藏</view>
         <view class="menu-card glass-card" @tap="goPage('/pages/my-likes/index')">我的点赞</view>
-        <view class="menu-card glass-card" @tap="goPage('/pages/my-partners/index')">我的搭子</view>
         <view class="menu-card glass-card" @tap="goPage('/pages/settings/index')">设置</view>
       </view>
     </view>
@@ -51,6 +50,7 @@ export default {
   },
   data() {
     return {
+      defaultAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=400',
       user: {
         avatar: '',
         nickname: '',
