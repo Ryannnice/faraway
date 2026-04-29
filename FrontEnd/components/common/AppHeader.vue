@@ -33,12 +33,23 @@ export default {
     fallback: {
       type: String,
       default: '/pages/home/index'
+    },
+    forceFallback: {
+      type: Boolean,
+      default: false
     }
   },
   methods: {
     onBack() {
       if (!this.backable) {
         return
+      }
+      if (this.forceFallback) {
+        const url = this.fallback
+        if (url && url.startsWith('/pages/') && url.includes('/index')) {
+          uni.reLaunch({ url })
+          return
+        }
       }
       safeBack(this.fallback)
     }

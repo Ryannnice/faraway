@@ -24,7 +24,7 @@ from app.services.auth_service import (
     upsert_user,
     verify_sms_code,
 )
-from app.services.oss_service import upload_media
+from app.services.oss_service import sign_read_url, upload_media
 from app.services.store import store
 
 router = APIRouter(prefix="/api", tags=["frontend-api"])
@@ -126,6 +126,17 @@ def interaction_exists(user_id: str, kind: str, target_id: str) -> bool:
 
 def strategy_model(raw: dict, user: CurrentUser | None = None) -> dict:
     strategy_id = raw["id"]
+    image_list = raw.get("imageList", [])
+    signed_image_list = []
+    for item in image_list:
+        if isinstance(item, dict):
+            next_item = dict(item)
+            next_item["url"] = sign_read_url(next_item.get("url", ""))
+            signed_image_list.append(next_item)
+        elif isinstance(item, str):
+            signed_image_list.append(sign_read_url(item))
+        else:
+            signed_image_list.append(item)
     result = {
         "id": strategy_id,
         "title": raw.get("title", ""),
@@ -133,7 +144,8 @@ def strategy_model(raw: dict, user: CurrentUser | None = None) -> dict:
         "content": raw.get("content", ""),
         "destination": raw.get("destination", ""),
         "days": raw.get("days", 0),
-        "coverUrl": raw.get("coverUrl", ""),
+        "coverUrl": sign_read_url(raw.get("coverUrl", "")),
+        "imageList": signed_image_list,
         "tags": raw.get("tags", []),
         "author": raw.get("author", {}),
         "likeCount": raw.get("likeCount", 0),
@@ -153,14 +165,22 @@ def strategy_model(raw: dict, user: CurrentUser | None = None) -> dict:
 
 def post_model(raw: dict, user: CurrentUser | None = None) -> dict:
     post_id = raw["id"]
+    media_list = []
+    for item in raw.get("mediaList", []):
+        if isinstance(item, dict):
+            next_item = dict(item)
+            next_item["url"] = sign_read_url(next_item.get("url", ""))
+            media_list.append(next_item)
+        else:
+            media_list.append(item)
     result = {
         "id": post_id,
         "type": raw.get("type", "vlog"),
         "title": raw.get("title", ""),
         "content": raw.get("content", ""),
         "location": raw.get("location", ""),
-        "coverUrl": raw.get("coverUrl", ""),
-        "mediaList": raw.get("mediaList", []),
+        "coverUrl": sign_read_url(raw.get("coverUrl", "")),
+        "mediaList": media_list,
         "tags": raw.get("tags", []),
         "author": raw.get("author", {}),
         "likeCount": raw.get("likeCount", 0),
@@ -1080,6 +1100,7 @@ class StrategyPayload(BaseModel):
     destination: str
     days: int = Field(default=1, gt=0, le=60)
     coverUrl: str = ""
+    imageList: list[dict] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     status: str = "published"
 
@@ -1348,26 +1369,12 @@ def get_my_notifications(current_user: CurrentUser = AuthUser) -> dict:
 @router.get("/home/feed")
 def get_home_feed(page: int = 1, pageSize: int = 10) -> dict:
     items = [
-        {
-            "id": item["id"],
-            "contentType": "strategy",
-            "title": item.get("title", ""),
-            "coverUrl": item.get("coverUrl", ""),
-            "summary": item.get("summary", ""),
-            "createdAt": item.get("createdAt"),
-        }
+        {"contentType": "strategy", **strategy_model(item)}
         for item in store.list("fe_strategies")
         if is_published(item)
     ]
     items += [
-        {
-            "id": item["id"],
-            "contentType": item.get("type", "vlog"),
-            "title": item.get("title", ""),
-            "coverUrl": item.get("coverUrl", ""),
-            "summary": item.get("content", ""),
-            "createdAt": item.get("createdAt"),
-        }
+        {"contentType": item.get("type", "vlog"), **post_model(item)}
         for item in store.list("fe_posts")
         if is_published(item)
     ]

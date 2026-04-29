@@ -1,7 +1,15 @@
 <template>
   <view v-if="detail" class="page-shell">
-    <AppHeader title="攻略详情" subtitle="Strategy Detail" :fallback="fallback" />
-    <image class="hero-image" :src="detail.coverUrl" mode="aspectFill" />
+    <AppHeader title="攻略详情" subtitle="Strategy Detail" :fallback="fallback" :force-fallback="fromPublish" />
+    <view v-if="galleryImages.length" class="hero-gallery">
+      <image
+        class="hero-image"
+        :src="galleryImages[0]"
+        mode="widthFix"
+        @tap="previewImages(0)"
+      />
+      <view v-if="galleryImages.length > 1" class="hero-hint">点击图片查看大图</view>
+    </view>
     <view class="meta-panel">
       <text class="section-kicker">{{ detail.destination }}</text>
       <text class="section-title detail-title">{{ detail.title }}</text>
@@ -40,6 +48,17 @@
 
     <view class="content-block glass-card">
       <text class="content-text">{{ detail.content }}</text>
+    </view>
+
+    <view v-if="galleryImages.length" class="gallery-block">
+      <image
+        v-for="(item, index) in galleryImages"
+        :key="item + index"
+        class="gallery-image"
+        :src="item"
+        mode="widthFix"
+        @tap="previewImages(index)"
+      />
     </view>
 
     <view class="stat-row glass-card">
@@ -88,13 +107,35 @@ export default {
     return {
       detail: null,
       fallback: '/pages/strategy-list/index',
+      fromPublish: false,
       commentText: '',
       comments: [],
       strategyId: ''
     }
   },
+  computed: {
+    galleryImages() {
+      if (!this.detail) {
+        return []
+      }
+      const images = Array.isArray(this.detail.imageList) ? this.detail.imageList : []
+      const normalized = images
+        .map((item) => {
+          if (typeof item === 'string') {
+            return item
+          }
+          return item && item.url ? item.url : ''
+        })
+        .filter(Boolean)
+      if (normalized.length) {
+        return normalized
+      }
+      return this.detail.coverUrl ? [this.detail.coverUrl] : []
+    }
+  },
   async onLoad(options) {
     this.strategyId = options && options.id
+    this.fromPublish = !!(options && String(options.fromPublish) === '1')
     await this.refreshDetail()
     this.loadComments()
   },
@@ -133,6 +174,15 @@ export default {
         icon: 'none'
       })
     },
+    previewImages(index = 0) {
+      if (!this.galleryImages.length) {
+        return
+      }
+      uni.previewImage({
+        current: this.galleryImages[index] || this.galleryImages[0],
+        urls: this.galleryImages
+      })
+    },
     async submitComment() {
       if (!this.commentText) {
         return
@@ -149,10 +199,20 @@ export default {
 </script>
 
 <style scoped lang="scss">
+.hero-gallery {
+  margin-top: 8rpx;
+}
+
 .hero-image {
   width: 100%;
-  height: 520rpx;
   border-radius: 34rpx;
+}
+
+.hero-hint {
+  margin-top: 14rpx;
+  font-size: 22rpx;
+  color: rgba(246, 240, 232, 0.45);
+  text-align: center;
 }
 
 .meta-panel {
@@ -181,6 +241,7 @@ export default {
 
 .author-card,
 .content-block,
+.gallery-block,
 .stat-row,
 .action-bar,
 .comment-card {
@@ -224,6 +285,17 @@ export default {
   gap: 12rpx;
   font-size: 24rpx;
   color: rgba(246, 240, 232, 0.72);
+}
+
+.gallery-block {
+  display: flex;
+  flex-direction: column;
+  gap: 18rpx;
+}
+
+.gallery-image {
+  width: 100%;
+  border-radius: 28rpx;
 }
 
 .action-item {

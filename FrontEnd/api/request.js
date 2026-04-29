@@ -86,7 +86,19 @@ function handleUnauthorized() {
 function buildHttpError(response) {
   const body = response && response.data
   const statusCode = response && response.statusCode ? response.statusCode : 0
-  const message = body && body.message ? body.message : `HTTP ${statusCode || 'request failed'}`
+  let message = `HTTP ${statusCode || 'request failed'}`
+  if (body && typeof body === 'object') {
+    if (body.message) {
+      message = body.message
+    } else if (typeof body.detail === 'string' && body.detail) {
+      message = body.detail
+    } else if (Array.isArray(body.detail) && body.detail.length) {
+      const firstDetail = body.detail[0]
+      if (firstDetail && typeof firstDetail === 'object' && firstDetail.msg) {
+        message = firstDetail.msg
+      }
+    }
+  }
   const error = new Error(message)
   error.statusCode = statusCode
   error.response = response

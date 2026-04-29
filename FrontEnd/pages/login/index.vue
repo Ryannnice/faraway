@@ -33,10 +33,12 @@
             <text class="field-label">账号</text>
             <input v-model.trim="form.username" class="field-input" placeholder="输入用户名" placeholder-style="color: rgba(12,19,32,0.36)" />
           </view>
+          <text v-if="authMode === 'register'" class="field-tip">用户名限 3-32 位，只能使用字母、数字和下划线</text>
           <view class="field-card">
             <text class="field-label">密码</text>
             <input v-model="form.password" class="field-input" password placeholder="输入密码" placeholder-style="color: rgba(12,19,32,0.36)" />
           </view>
+          <text v-if="authMode === 'register'" class="field-tip">密码需为 6-128 位</text>
           <view v-if="authMode === 'register'" class="field-card">
             <text class="field-label">确认密码</text>
             <input v-model="form.confirmPassword" class="field-input" password placeholder="再次输入密码" placeholder-style="color: rgba(12,19,32,0.36)" />
@@ -59,6 +61,9 @@
 <script>
 import { passwordLogin, registerByPassword } from '../../api/modules/auth'
 import { useUserStore } from '../../stores/user'
+import { isLoggedIn } from '../../utils/auth'
+
+const USERNAME_PATTERN = /^[A-Za-z0-9_]+$/
 
 export default {
   data() {
@@ -73,7 +78,18 @@ export default {
       }
     }
   },
+  onShow() {
+    this.redirectIfLoggedIn()
+  },
   methods: {
+    redirectIfLoggedIn() {
+      if (!isLoggedIn()) {
+        return
+      }
+      uni.switchTab({
+        url: '/pages/home/index'
+      })
+    },
     completeLogin(result) {
       const token = result && typeof result.token === 'string' ? result.token : ''
       const userInfo = result && result.userInfo && typeof result.userInfo === 'object' ? result.userInfo : null
@@ -120,6 +136,27 @@ export default {
       if (!this.form.username || !this.form.password || !this.form.confirmPassword) {
         uni.showToast({
           title: '请填写完整注册信息',
+          icon: 'none'
+        })
+        return
+      }
+      if (this.form.username.length < 3 || this.form.username.length > 32) {
+        uni.showToast({
+          title: '用户名需为 3-32 位',
+          icon: 'none'
+        })
+        return
+      }
+      if (!USERNAME_PATTERN.test(this.form.username)) {
+        uni.showToast({
+          title: '用户名仅支持字母数字下划线',
+          icon: 'none'
+        })
+        return
+      }
+      if (this.form.password.length < 6 || this.form.password.length > 128) {
+        uni.showToast({
+          title: '密码需为 6-128 位',
           icon: 'none'
         })
         return
@@ -271,6 +308,14 @@ export default {
   margin-top: 12rpx;
   font-size: 28rpx;
   color: #0c1320;
+}
+
+.field-tip {
+  display: block;
+  margin-top: 10rpx;
+  margin-left: 12rpx;
+  font-size: 22rpx;
+  color: rgba(12, 19, 32, 0.52);
 }
 
 .action-btn {

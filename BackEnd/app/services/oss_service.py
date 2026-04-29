@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import oss2
@@ -17,6 +18,11 @@ logger = logging.getLogger(__name__)
 class UploadResult:
     url: str
     filename: str
+
+
+def _create_bucket_client() -> oss2.Bucket:
+    auth = oss2.Auth(settings.oss_access_key_id, settings.oss_access_key_secret)
+    return oss2.Bucket(auth, settings.oss_endpoint, settings.oss_bucket_name)
 
 
 def _missing_oss_fields() -> list[str]:
@@ -59,8 +65,7 @@ async def upload_media(file: UploadFile, media_type: str, user_id: str, request_
         settings.oss_endpoint,
     )
 
-    auth = oss2.Auth(settings.oss_access_key_id, settings.oss_access_key_secret)
-    bucket = oss2.Bucket(auth, settings.oss_endpoint, settings.oss_bucket_name)
+    bucket = _create_bucket_client()
     try:
         bucket.put_object(key, content)
     except Exception as exc:
@@ -82,3 +87,35 @@ async def upload_media(file: UploadFile, media_type: str, user_id: str, request_
         url = f"https://{settings.oss_bucket_name}.{endpoint_host}/{key}"
     logger.info("OSS upload succeeded: key=%s url=%s", key, url)
     return UploadResult(url=url, filename=filename)
+
+
+def _extract_oss_key_from_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+
+    endpoint_host = settings.oss_endpoint.removeprefix("https://").removeprefix("http://").rstrip("/")
+    bucket_host = f"{settings.oss_bucket_name}.{endpoint_host}"
+    public_host = urlparse(settings.oss_public_base_url).netloc if settings.oss_public_base_url else ""
+    if parsed.netloc not in {bucket_host, public_host}:
+        return ""
+    return parsed.path.lstrip("/")
+
+
+def sign_read_url(url: str) -> str:
+    missing = _missing_oss_fields()
+    if missing or not url:
+        return url
+
+    key = _extract_oss_key_from_url(url)
+    if not key:
+        return url
+
+    try:
+        bucket = _create_bucket_client()
+        return bucket.sign_url("GET", key, settings.oss_sign_expire_seconds)
+    except Exception:
+        logger.exception("OSS sign url failed for key=%s", key)
+        return url

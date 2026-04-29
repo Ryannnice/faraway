@@ -114,7 +114,8 @@ export default {
       },
       uploadingVideo: false,
       videoPreviewUrl: '',
-      remoteVideoUrl: ''
+      remoteVideoUrl: '',
+      videoPosterPreviewUrl: ''
     }
   },
   computed: {
@@ -125,7 +126,7 @@ export default {
       return this.videoPreviewUrl || this.remoteVideoUrl
     },
     displayVideoPoster() {
-      return this.form.coverUrl
+      return this.videoPosterPreviewUrl || this.form.coverUrl
     },
     hasUploadingImages() {
       return this.form.imageList.some((item) => item.status === 'uploading')
@@ -152,6 +153,7 @@ export default {
         type: draft.draftType === 'strategy' ? 'strategy' : 'vlog'
       }
       this.videoPreviewUrl = ''
+      this.videoPosterPreviewUrl = ''
       this.remoteVideoUrl =
         draft.payload && Array.isArray(draft.payload.mediaList) && draft.payload.mediaList[0]
           ? draft.payload.mediaList[0].url || ''
@@ -162,15 +164,23 @@ export default {
       const firstUploaded = this.form.imageList.find((item) => item.remoteUrl)
       this.form.coverUrl = firstUploaded ? firstUploaded.remoteUrl : ''
     },
+    serializeStrategyImages() {
+      return this.form.imageList
+        .filter((item) => item && item.remoteUrl)
+        .map((item) => ({
+          url: item.remoteUrl
+        }))
+    },
     buildStrategyPayload() {
-      const uploadedImages = this.form.imageList.filter((item) => item.remoteUrl)
+      const uploadedImages = this.serializeStrategyImages()
       return {
         title: this.form.title,
         summary: this.form.content ? this.form.content.slice(0, 48) : '',
         content: this.form.content,
         destination: this.form.location,
         days: 3,
-        coverUrl: uploadedImages.length ? uploadedImages[0].remoteUrl : '',
+        coverUrl: uploadedImages.length ? uploadedImages[0].url : '',
+        imageList: uploadedImages,
         tags: this.form.location ? [this.form.location] : []
       }
     },
@@ -238,15 +248,28 @@ export default {
     chooseVideoMedia() {
       uni.chooseVideo({
         sourceType: ['album', 'camera'],
+        compressed: false,
         success: async (result) => {
           this.videoPreviewUrl = result.tempFilePath || ''
+          this.videoPosterPreviewUrl = result.thumbTempFilePath || ''
           this.remoteVideoUrl = ''
           this.uploadingVideo = true
           try {
             const uploaded = await uploadVideo({
               path: result.tempFilePath
             })
-            this.form.coverUrl = uploaded.coverUrl || uploaded.url || ''
+            let remoteCoverUrl = uploaded.coverUrl || ''
+            if (!remoteCoverUrl && result.thumbTempFilePath) {
+              try {
+                const uploadedPoster = await uploadImage({
+                  path: result.thumbTempFilePath
+                })
+                remoteCoverUrl = uploadedPoster.url || ''
+              } catch (posterError) {
+                console.warn('video poster upload failed', posterError)
+              }
+            }
+            this.form.coverUrl = remoteCoverUrl
             this.remoteVideoUrl = uploaded.url || ''
             this.form.mediaList = this.remoteVideoUrl ? [{ type: 'video', url: this.remoteVideoUrl }] : []
             uni.showToast({
@@ -255,7 +278,9 @@ export default {
             })
           } catch (error) {
             this.videoPreviewUrl = ''
+            this.videoPosterPreviewUrl = ''
             this.remoteVideoUrl = ''
+            this.form.coverUrl = ''
             uni.showToast({
               title: error && error.message ? error.message : '视频上传失败',
               icon: 'none'
@@ -298,7 +323,9 @@ export default {
           return
         }
         const result = await createStrategy(this.buildStrategyPayload())
-        go(`/pages/strategy-detail/index?id=${result.id}`)
+        uni.redirectTo({
+          url: `/pages/strategy-detail/index?id=${result.id}&fromPublish=1`
+        })
         return
       }
       if (this.uploadingVideo) {
@@ -309,7 +336,9 @@ export default {
         return
       }
       const result = await createPost(this.buildPostPayload())
-      go(`/pages/vlog-detail/index?id=${result.id}`)
+      uni.redirectTo({
+        url: `/pages/vlog-detail/index?id=${result.id}&fromPublish=1`
+      })
     }
   }
 }

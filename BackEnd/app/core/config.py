@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     oss_bucket_name: str = ""
     oss_public_base_url: str = ""
     oss_upload_prefix: str = "faraway"
+    oss_sign_expire_seconds: int = 3600
     local_media_dir: str = "data/uploads"
     local_media_url_prefix: str = "/media"
 

@@ -147,7 +147,9 @@ export default {
         icon: 'none'
       })
       setTimeout(() => {
-        go(`/pages/strategy-detail/index?id=${saved.id}`)
+        uni.redirectTo({
+          url: `/pages/strategy-detail/index?id=${saved.id}&fromPublish=1`
+        })
       }, 240)
     }
   }
