@@ -3,7 +3,7 @@ import { onPullDownRefresh, onShow } from "@dcloudio/uni-app";
 
 import AppNavBar from "@/components/AppNavBar.vue";
 import { ROUTES } from "@/constants/routes";
-import { useAuthGuard } from "@/composables/useAuthGuard";
+import { ensureLoggedIn, useAuthGuard } from "@/composables/useAuthGuard";
 import { useNotificationStore } from "@/stores/notification";
 import { formatDateTime } from "@/utils/format";
 import { go } from "@/utils/navigation";
@@ -13,6 +13,9 @@ useAuthGuard();
 const notificationStore = useNotificationStore();
 
 async function refresh() {
+  if (!ensureLoggedIn()) {
+    return;
+  }
   try {
     await notificationStore.fetchList();
   } catch (error) {

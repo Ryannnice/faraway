@@ -22,9 +22,6 @@ export const useAuthStore = defineStore("auth", {
   },
   actions: {
     hydrate() {
-      if (this.hydrated) {
-        return;
-      }
       this.token = getToken();
       this.userInfo = getUserInfoStorage<UserInfo>();
       this.hydrated = true;

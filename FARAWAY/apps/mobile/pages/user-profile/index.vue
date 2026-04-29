@@ -4,13 +4,16 @@ import { onLoad } from "@dcloudio/uni-app";
 
 import AppNavBar from "@/components/AppNavBar.vue";
 import { getUserProfile } from "@/api/user";
-import { useAuthGuard } from "@/composables/useAuthGuard";
+import { ensureLoggedIn, useAuthGuard } from "@/composables/useAuthGuard";
 
 useAuthGuard();
 
 const profile = ref(null);
 
 onLoad(async (options) => {
+  if (!ensureLoggedIn()) {
+    return;
+  }
   const userId = options && options.user_id ? options.user_id : "";
   if (!userId) {
     uni.showToast({ title: "缺少用户 ID", icon: "none" });

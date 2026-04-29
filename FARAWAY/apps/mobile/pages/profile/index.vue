@@ -5,7 +5,7 @@ import { onShow } from "@dcloudio/uni-app";
 import AppNavBar from "@/components/AppNavBar.vue";
 import { ROUTES } from "@/constants/routes";
 import { uploadImage } from "@/api/request";
-import { useAuthGuard } from "@/composables/useAuthGuard";
+import { ensureLoggedIn, useAuthGuard } from "@/composables/useAuthGuard";
 import { useProfileStore } from "@/stores/profile";
 import { go } from "@/utils/navigation";
 
@@ -21,11 +21,21 @@ const form = reactive({
 });
 
 onShow(async () => {
-  const profile = await profileStore.fetchProfile();
-  form.nickname = profile.nickname;
-  form.bio = profile.bio;
-  form.avatar = profile.avatar;
-  form.gender = profile.gender;
+  if (!ensureLoggedIn()) {
+    return;
+  }
+  try {
+    const profile = await profileStore.fetchProfile();
+    form.nickname = profile.nickname;
+    form.bio = profile.bio;
+    form.avatar = profile.avatar;
+    form.gender = profile.gender;
+  } catch (error) {
+    uni.showToast({
+      title: error instanceof Error ? error.message : "加载失败",
+      icon: "none",
+    });
+  }
 });
 
 async function chooseAvatar() {

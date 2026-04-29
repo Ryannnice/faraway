@@ -1,5 +1,5 @@
 import { ROUTES } from "@/constants/routes";
-import { clearToken, getToken } from "@/utils/storage";
+import { clearToken, clearUserInfoStorage, getToken } from "@/utils/storage";
 
 import type { ApiEnvelope } from "./types";
 
@@ -7,6 +7,7 @@ const API_BASE_URL = "http://127.0.0.1:8000";
 
 function handleAuthExpired(): void {
   clearToken();
+  clearUserInfoStorage();
   uni.reLaunch({ url: ROUTES.login });
 }
 
@@ -25,6 +26,12 @@ export function request<T>(options: {
   }
 
   return new Promise((resolve, reject) => {
+    if (options.auth !== false && !token) {
+      handleAuthExpired();
+      reject(new Error("请先登录"));
+      return;
+    }
+
     uni.request({
       url: `${API_BASE_URL}${options.url}`,
       method: options.method ?? "GET",
@@ -34,6 +41,8 @@ export function request<T>(options: {
         const body = response.data as ApiEnvelope<T>;
         if (response.statusCode === 401) {
           handleAuthExpired();
+          reject(new Error(body && body.message ? body.message : "登录已失效"));
+          return;
         }
         if (response.statusCode >= 200 && response.statusCode < 300 && body.code === 0) {
           resolve(body.data);
@@ -51,6 +60,12 @@ export function request<T>(options: {
 export function uploadImage(filePath: string): Promise<{ asset_id: string; url: string }> {
   const token = getToken();
   return new Promise((resolve, reject) => {
+    if (!token) {
+      handleAuthExpired();
+      reject(new Error("请先登录"));
+      return;
+    }
+
     uni.uploadFile({
       url: `${API_BASE_URL}/api/upload/image`,
       name: "file",

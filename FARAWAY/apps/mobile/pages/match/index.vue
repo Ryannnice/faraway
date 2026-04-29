@@ -5,7 +5,7 @@ import { onHide, onShow } from "@dcloudio/uni-app";
 import AppNavBar from "@/components/AppNavBar.vue";
 import { MATCH_PREFERENCE_TAGS, MATCH_STATUS_LABELS } from "@/constants/match";
 import { ROUTES } from "@/constants/routes";
-import { useAuthGuard } from "@/composables/useAuthGuard";
+import { ensureLoggedIn, useAuthGuard } from "@/composables/useAuthGuard";
 import { useMatchStore } from "@/stores/match";
 import { formatDate, formatDateTime } from "@/utils/format";
 import { go } from "@/utils/navigation";
@@ -79,6 +79,9 @@ function syncFormFromCurrent() {
 }
 
 async function refreshCurrent() {
+  if (!ensureLoggedIn()) {
+    return;
+  }
   try {
     await matchStore.fetchCurrent();
     if (current.value && current.value.status === "matched_waiting_decision" && current.value.candidate) {
@@ -115,6 +118,9 @@ function stopPolling() {
 }
 
 onShow(async () => {
+  if (!ensureLoggedIn()) {
+    return;
+  }
   await refreshCurrent();
   startPolling();
 });

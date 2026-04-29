@@ -5,7 +5,7 @@ import { onShow } from "@dcloudio/uni-app";
 import AppNavBar from "@/components/AppNavBar.vue";
 import { MATCH_STATUS_LABELS } from "@/constants/match";
 import { ROUTES } from "@/constants/routes";
-import { useAuthGuard } from "@/composables/useAuthGuard";
+import { ensureLoggedIn, useAuthGuard } from "@/composables/useAuthGuard";
 import { useMatchStore } from "@/stores/match";
 import { formatDate, formatDateTime } from "@/utils/format";
 import { go } from "@/utils/navigation";
@@ -29,7 +29,15 @@ const currentSummary = computed(() => {
 const currentPair = computed(() => (current.value ? current.value.pair : null));
 
 onShow(() => {
-  void matchStore.fetchCurrent();
+  if (!ensureLoggedIn()) {
+    return;
+  }
+  void matchStore.fetchCurrent().catch((error) => {
+    uni.showToast({
+      title: error instanceof Error ? error.message : "加载失败",
+      icon: "none",
+    });
+  });
 });
 </script>
 
