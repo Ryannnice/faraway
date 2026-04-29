@@ -135,8 +135,10 @@ export default {
 
 <style scoped lang="scss">
 .vlog-page {
-  min-height: 100vh;
-  position: relative;
+  position: fixed;
+  inset: 0;
+  height: 100vh;
+  overflow: hidden;
   background: #0a0d12;
 }
 
@@ -173,7 +175,7 @@ export default {
 
 .vlog-item {
   position: relative;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 
