@@ -7,14 +7,14 @@
         :key="videoKey"
         class="main-video"
         :src="getVideoUrl(currentItem)"
-        :poster="disablePoster ? '' : getPosterUrl(currentItem)"
+        :poster="getVideoPoster(currentItem)"
         object-fit="contain"
         autoplay
         loop
-        :muted="false"
-        :controls="false"
-        :show-center-play-btn="false"
-        :show-play-btn="false"
+        muted
+        :controls="true"
+        :show-center-play-btn="true"
+        :show-play-btn="true"
         :enable-progress-gesture="true"
       />
 
@@ -30,28 +30,10 @@
         </view>
       </view>
 
-      <view class="top-tools">
-        <view class="search-btn" @tap="openSearch">搜索标签、城市...</view>
-      </view>
+      <cover-view :key="`top-${currentItem ? currentItem.id : 'empty'}`" class="top-tools">
+        <cover-view class="search-btn" @tap="openSearch">搜索标签、城市...</cover-view>
+      </cover-view>
 
-      <view v-if="currentItem" class="side-actions">
-        <view class="action-item" @tap="toggleLike(currentItem)">
-          <text class="action-icon">{{ currentItem.isLiked ? '♥' : '♡' }}</text>
-          <text class="action-text">{{ formatCount(currentItem.likeCount) }}</text>
-        </view>
-        <view class="action-item" @tap="toggleFavorite(currentItem)">
-          <text class="action-icon">{{ currentItem.isFavorited ? '★' : '☆' }}</text>
-          <text class="action-text">{{ formatCount(currentItem.favoriteCount) }}</text>
-        </view>
-        <view class="action-item" @tap="openDetail(currentItem.id)">
-          <text class="action-icon">✎</text>
-          <text class="action-text">{{ formatCount(currentItem.commentCount) }}</text>
-        </view>
-        <view class="action-item" @tap="shareItem(currentItem)">
-          <text class="action-icon">⇪</text>
-          <text class="action-text">{{ formatCount(currentItem.shareCount) }}</text>
-        </view>
-      </view>
     </view>
 
     <view v-if="currentItem" class="bottom-panel">
@@ -98,8 +80,7 @@ export default {
       currentIndex: 0,
       defaultAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=400',
       isPlaying: true,
-      videoKey: 0,
-      disablePoster: true
+      videoKey: 0
     }
   },
   computed: {
@@ -133,6 +114,9 @@ export default {
     getPosterUrl(item) {
       return getPostPosterUrl(item)
     },
+    getVideoPoster(item) {
+      return this.getPosterUrl(item) || this.getFeedCover(item) || ''
+    },
     getFeedCover(item) {
       const posterUrl = this.getPosterUrl(item)
       if (posterUrl) {
@@ -144,7 +128,7 @@ export default {
       return ''
     },
     async fetchList() {
-      const result = await getPostList()
+      const result = await getPostList({ type: 'vlog' })
       this.list = shuffleItems(result.list || [])
       this.currentIndex = 0
       this.videoKey += 1
@@ -298,40 +282,6 @@ export default {
   font-size: 26rpx;
   display: flex;
   align-items: center;
-}
-
-.side-actions {
-  position: absolute;
-  right: 18rpx;
-  bottom: 60rpx;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  gap: 20rpx;
-}
-
-.action-item {
-  width: 92rpx;
-  min-height: 92rpx;
-  padding: 10rpx 0;
-  border-radius: 22rpx;
-  background: rgba(0, 0, 0, 0.36);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-.action-icon {
-  color: #fff;
-  font-size: 40rpx;
-  line-height: 1;
-}
-
-.action-text {
-  margin-top: 8rpx;
-  color: #fff;
-  font-size: 20rpx;
 }
 
 .bottom-panel {

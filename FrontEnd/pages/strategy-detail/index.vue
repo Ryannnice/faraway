@@ -46,18 +46,18 @@
       </view>
     </view>
 
-    <view class="content-block glass-card">
+    <view v-if="detail.content" class="content-block glass-card">
       <text class="content-text">{{ detail.content }}</text>
     </view>
 
-    <view v-if="galleryImages.length" class="gallery-block">
+    <view v-if="extraGalleryImages.length" class="gallery-block">
       <image
-        v-for="(item, index) in galleryImages"
+        v-for="(item, index) in extraGalleryImages"
         :key="item + index"
         class="gallery-image"
         :src="item"
         mode="widthFix"
-        @tap="previewImages(index)"
+        @tap="previewImages(index + 1)"
       />
     </view>
 
@@ -131,6 +131,9 @@ export default {
         return normalized
       }
       return this.detail.coverUrl ? [this.detail.coverUrl] : []
+    },
+    extraGalleryImages() {
+      return this.galleryImages.slice(1)
     }
   },
   async onLoad(options) {
